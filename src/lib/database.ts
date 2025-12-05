@@ -353,26 +353,23 @@ export class DatabaseService {
   static async getStandaloneTeamPositions(equipmentId: string) {
     try {
       console.log('🔍 getStandaloneTeamPositions: Fetching for equipment:', equipmentId);
-      console.log('🔍 Equipment ID type:', typeof equipmentId);
-      console.log('🔍 Equipment ID length:', equipmentId?.length);
       
-      // Use REST API instead of Supabase client to avoid hanging issues
+      // Use REST API directly to avoid hanging issues with Supabase client
       const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
       const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
       
-      const queryUrl = `${SUPABASE_URL}/rest/v1/standalone_equipment_team_positions?equipment_id=eq.${equipmentId}&order=created_at.desc`;
-      console.log('📤 getStandaloneTeamPositions: Query URL:', queryUrl);
-      console.log('📤 getStandaloneTeamPositions: Query prepared, executing via REST API...');
-      
-      const response = await fetch(queryUrl, {
-        method: 'GET',
-        headers: {
-          'apikey': SUPABASE_ANON_KEY,
-          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=representation'
+      const response = await fetch(
+        `${SUPABASE_URL}/rest/v1/standalone_equipment_team_positions?equipment_id=eq.${equipmentId}&order=created_at.desc`,
+        {
+          method: 'GET',
+          headers: {
+            'apikey': SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
+          }
         }
-      });
+      );
       
       if (!response.ok) {
         const errorText = await response.text();
@@ -381,7 +378,6 @@ export class DatabaseService {
       }
       
       const data = await response.json();
-      
       console.log('📊 getStandaloneTeamPositions: Supabase response received');
       console.log('   - data:', data);
       console.log('   - data type:', typeof data);

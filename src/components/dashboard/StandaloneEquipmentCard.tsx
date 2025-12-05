@@ -1,4 +1,4 @@
-﻿import React from "react";
+import React from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -845,22 +845,22 @@ const StandaloneEquipmentCard: React.FC<StandaloneEquipmentCardProps> = (props) 
                             <div>
                               <Label className="text-xs text-gray-600">Last Updated On</Label>
                               <Input
-                                type="datetime-local"
+                                type="date"
                                 value={overviewLastUpdateRaw[item.id] || ''}
                                 onChange={(e) => {
                                   const raw = e.target.value;
                                   setOverviewLastUpdateRaw(prev => ({ ...prev, [item.id]: raw }));
                                   setEditFormData({
                                     ...editFormData,
-                                    lastUpdate: raw ? formatDateTimeDisplay(raw) : ''
+                                    lastUpdate: raw ? formatDateDisplay(raw) : ''
                                   });
                                 }}
                                 className="text-xs h-8"
                               />
-                              <p className="text-[11px] text-gray-400 mt-1">Reference timestamp shown to the team</p>
+                              <p className="text-[11px] text-gray-400 mt-1">Reference date shown to the team</p>
                               {overviewLastUpdateRaw[item.id] && (
                                 <p className="text-[11px] text-blue-500 mt-1">
-                                  {formatDateTimeDisplay(overviewLastUpdateRaw[item.id])}
+                                  {formatDateDisplay(overviewLastUpdateRaw[item.id])}
                                 </p>
                               )}
                             </div>
@@ -915,7 +915,61 @@ const StandaloneEquipmentCard: React.FC<StandaloneEquipmentCardProps> = (props) 
                           const designCodeValue = item.designCode && item.designCode.trim() !== '' ? item.designCode : 'â€”';
                           const equipmentEntries = progressEntries[item.id] || item.progressEntries || [];
                           const latestEntry = equipmentEntries.length > 0 ? equipmentEntries[equipmentEntries.length - 1] : null;
-                          const lastUpdatedValue = latestEntry?.date || latestEntry?.created_at || item.lastUpdate || 'â€”';
+                          // Get lastUpdate value - prioritize last_update (DATE column) over other fields
+                          // For standalone equipment, we want to show only date, so prioritize last_update field
+                          // Check both last_update (database column) and lastUpdate (transformed field)
+                          const lastUpdateRaw = (item as any).last_update || item.lastUpdate || null;
+                          const updatedAtRaw = (item as any).updated_at || null;
+                          
+                          // Format to show only date (no time) - always extract date part from timestamp
+                          let lastUpdatedValue = 'â€"';
+                          
+                          // Helper function to extract date only from any date/timestamp string
+                          const extractDateOnly = (dateValue: any): string => {
+                            if (!dateValue) return '';
+                            const dateStr = String(dateValue);
+                            // Remove time part - handle both ISO format (T separator) and space separator
+                            let dateOnly = dateStr.split('T')[0].split(' ')[0];
+                            // Ensure it's in YYYY-MM-DD format (should be 10 characters)
+                            if (dateOnly.length >= 10) {
+                              dateOnly = dateOnly.substring(0, 10);
+                            }
+                            return dateOnly;
+                          };
+                          
+                          // Helper function to format date for display
+                          const formatDateForDisplay = (dateValue: any): string => {
+                            if (!dateValue) return 'â€"';
+                            try {
+                              const dateOnly = extractDateOnly(dateValue);
+                              if (dateOnly && dateOnly.length === 10) {
+                                return formatDateDisplay(dateOnly);
+                              }
+                            } catch (error) {
+                              console.error('Error formatting date:', error, dateValue);
+                            }
+                            return 'â€"';
+                          };
+                          
+                          // Priority: last_update (DATE column) > lastUpdate (transformed) > updated_at (timestamp) > latestEntry
+                          if (lastUpdateRaw) {
+                            // lastUpdateRaw could be a date string (YYYY-MM-DD) or already formatted date
+                            // Check if it's already formatted (contains month name like "Dec")
+                            if (String(lastUpdateRaw).match(/[A-Za-z]{3}/)) {
+                              // Already formatted, use as is
+                              lastUpdatedValue = String(lastUpdateRaw);
+                            } else {
+                              // Extract date and format
+                              lastUpdatedValue = formatDateForDisplay(lastUpdateRaw);
+                            }
+                          } else if (updatedAtRaw) {
+                            // Fallback to updated_at, but extract date only
+                            lastUpdatedValue = formatDateForDisplay(updatedAtRaw);
+                          } else if (latestEntry?.date || latestEntry?.created_at) {
+                            // Fallback to latest entry date, but format to show only date
+                            const fallbackDate = latestEntry.date || latestEntry.created_at;
+                            lastUpdatedValue = formatDateForDisplay(fallbackDate);
+                          }
                           const updateDescription =
                             latestEntry?.text || latestEntry?.comment || latestEntry?.entry_text ||
                             (item.notes && item.notes.trim() !== '' ? item.notes : '') ||
@@ -945,7 +999,55 @@ const StandaloneEquipmentCard: React.FC<StandaloneEquipmentCardProps> = (props) 
                                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                                   <div>
                                     <div className="text-[11px] uppercase tracking-wide text-blue-600">Last Updated</div>
-                                    <div className="text-sm font-semibold text-gray-900 mt-1">{lastUpdatedValue}</div>
+                                    <div className="text-sm font-semibold text-gray-900 mt-1">
+                                      {(() => {
+                                        // Final safeguard: ensure we never display raw timestamps
+                                        if (!lastUpdatedValue || lastUpdatedValue === 'â€"' || lastUpdatedValue === '—') return '—';
+                                        
+                                        const valueStr = String(lastUpdatedValue);
+                                        
+                                        // Check if it's a raw timestamp (contains T, +, or multiple colons)
+                                        const isTimestamp = valueStr.includes('T') || 
+                                                           (valueStr.includes('+') && valueStr.length > 15) || 
+                                                           (valueStr.match(/:/g) && valueStr.match(/:/g)!.length >= 2);
+                                        
+                                        if (isTimestamp) {
+                                          try {
+                                            // Extract date part from timestamp
+                                            let dateOnly = valueStr.split('T')[0].split(' ')[0];
+                                            // Remove timezone info if present
+                                            dateOnly = dateOnly.split('+')[0].split('-').slice(0, 3).join('-');
+                                            // Ensure it's YYYY-MM-DD format
+                                            if (dateOnly.length >= 10) {
+                                              dateOnly = dateOnly.substring(0, 10);
+                                            }
+                                            if (dateOnly && dateOnly.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                                              return formatDateDisplay(dateOnly);
+                                            }
+                                          } catch (error) {
+                                            console.error('Error extracting date from timestamp:', error, valueStr);
+                                          }
+                                          return '—';
+                                        }
+                                        
+                                        // If it's already a formatted date (contains month name), use as is
+                                        if (valueStr.match(/[A-Za-z]{3}/)) {
+                                          return lastUpdatedValue;
+                                        }
+                                        
+                                        // If it's a date string in YYYY-MM-DD format, format it
+                                        if (valueStr.match(/^\d{4}-\d{2}-\d{2}/)) {
+                                          try {
+                                            return formatDateDisplay(valueStr.substring(0, 10));
+                                          } catch {
+                                            return lastUpdatedValue;
+                                          }
+                                        }
+                                        
+                                        // Default: return as is (should already be formatted)
+                                        return lastUpdatedValue;
+                                      })()}
+                                    </div>
                                   </div>
                                   {(item.nextMilestone && item.nextMilestone.trim() !== '') || item.nextMilestoneDate ? (
                                     <div className="text-left sm:text-right">

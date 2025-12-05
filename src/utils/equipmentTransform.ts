@@ -21,7 +21,10 @@ export const transformEquipmentData = (dbEquipment: any[]): Equipment[] => {
       completionDate: eq.completion_date || 'No deadline set',
       location: eq.location || 'Not Assigned',
       supervisor: eq.supervisor || '',
-      lastUpdate: eq.updated_at ? new Date(eq.updated_at).toLocaleDateString() : new Date().toLocaleDateString(),
+      // For standalone equipment, prioritize last_update (DATE column) over updated_at (timestamp)
+      // last_update is already a date string (YYYY-MM-DD), so use it directly
+      lastUpdate: eq.last_update || (eq.updated_at ? new Date(eq.updated_at).toLocaleDateString() : new Date().toLocaleDateString()),
+      last_update: eq.last_update || undefined, // Store raw date (DATE type) for standalone equipment
       updated_at: eq.updated_at || undefined, // Store raw timestamp for date inputs
       images: eq.images || [],
       progressImages: eq.progress_images || [], // Main progress images (top section)
