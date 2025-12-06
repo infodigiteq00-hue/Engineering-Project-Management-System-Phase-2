@@ -559,7 +559,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
     setAllCertificationTitles(Array.from(titles).sort());
   }, [localEquipment]);
 
-  // Initialize date fields and notes when entering edit mode
+  // Initialize date fields and notes when entering edit mode or when equipment data is refreshed
   useEffect(() => {
     if (editingEquipmentId) {
       const equipment = localEquipment.find(eq => eq.id === editingEquipmentId);
@@ -568,11 +568,16 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
         // For standalone equipment, prioritize last_update (DATE column) over updated_at (timestamp)
         // last_update is already in YYYY-MM-DD format from the database
         let dateOnly = '';
+        
+        // First priority: last_update field (raw DATE from database)
         if ((equipment as any).last_update) {
           // Use last_update directly if available (already in YYYY-MM-DD format)
-          dateOnly = String((equipment as any).last_update).split('T')[0];
-        } else if (equipment.updated_at) {
-          // Fallback to updated_at timestamp
+          const rawDate = String((equipment as any).last_update);
+          dateOnly = rawDate.split('T')[0].split(' ')[0]; // Handle both datetime and date strings
+          console.log('📅 useEffect - Using last_update:', dateOnly, 'from raw:', rawDate);
+        } 
+        // Second priority: updated_at timestamp
+        else if (equipment.updated_at) {
           try {
             const updatedDate = new Date(equipment.updated_at);
             if (!isNaN(updatedDate.getTime())) {
@@ -580,12 +585,14 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
               const month = String(updatedDate.getMonth() + 1).padStart(2, '0');
               const day = String(updatedDate.getDate()).padStart(2, '0');
               dateOnly = `${year}-${month}-${day}`;
+              console.log('📅 useEffect - Using updated_at:', dateOnly);
             }
           } catch (error) {
             console.error('Error parsing updated_at in useEffect:', error);
           }
-        } else if (equipment.lastUpdate) {
-          // Try to parse lastUpdate if it's a formatted date string
+        } 
+        // Third priority: lastUpdate formatted string
+        else if (equipment.lastUpdate) {
           try {
             const parsedDate = new Date(equipment.lastUpdate);
             if (!isNaN(parsedDate.getTime())) {
@@ -593,23 +600,39 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
               const month = String(parsedDate.getMonth() + 1).padStart(2, '0');
               const day = String(parsedDate.getDate()).padStart(2, '0');
               dateOnly = `${year}-${month}-${day}`;
+              console.log('📅 useEffect - Using lastUpdate:', dateOnly);
             }
           } catch (error) {
             console.error('Error parsing lastUpdate in useEffect:', error);
           }
         }
+        
+        // Always set the date if we found one (even if it matches current value, to ensure it's set)
+        // This ensures the date picker shows the saved value when entering edit mode
         if (dateOnly) {
           console.log('📅 useEffect - Setting overviewLastUpdateRaw for', editingEquipmentId, ':', dateOnly);
           setOverviewLastUpdateRaw(prev => {
-            // Only update if the value is different to avoid unnecessary re-renders
-            if (prev[editingEquipmentId] !== dateOnly) {
-              console.log('📅 useEffect - Updating date from', prev[editingEquipmentId], 'to', dateOnly);
-              return { ...prev, [editingEquipmentId]: dateOnly };
+            const currentValue = prev[editingEquipmentId];
+            // Always update to ensure the date is set (even if it's the same)
+            // This is important when entering edit mode for the first time
+            if (currentValue !== dateOnly) {
+              console.log('📅 useEffect - Updating date from', currentValue || '(empty)', 'to', dateOnly);
+            } else {
+              console.log('📅 useEffect - Date already set correctly:', dateOnly);
+            }
+            return { ...prev, [editingEquipmentId]: dateOnly };
+          });
+        } else {
+          // If no date found, only clear if there's a value (don't create unnecessary state updates)
+          setOverviewLastUpdateRaw(prev => {
+            if (prev[editingEquipmentId]) {
+              console.log('📅 useEffect - Clearing date for', editingEquipmentId, '(no date found in equipment)');
+              const updated = { ...prev };
+              delete updated[editingEquipmentId];
+              return updated;
             }
             return prev;
           });
-        } else {
-          console.warn('⚠️ useEffect - No date value found for equipment:', editingEquipmentId);
         }
 
         // Initialize Next Milestone Date
@@ -1502,16 +1525,20 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
       id: equipment.id,
       last_update: (equipment as any).last_update,
       updated_at: equipment.updated_at,
-      lastUpdate: equipment.lastUpdate
+      lastUpdate: equipment.lastUpdate,
+      equipmentKeys: Object.keys(equipment)
     });
     
     let dateOnly = '';
+    // First priority: last_update field (raw DATE from database)
     if ((equipment as any).last_update) {
       // Use last_update directly if available (already in YYYY-MM-DD format)
-      dateOnly = String((equipment as any).last_update).split('T')[0];
-      console.log('✅ Using last_update:', dateOnly);
-    } else if (equipment.updated_at) {
-      // Fallback to updated_at timestamp
+      const rawDate = String((equipment as any).last_update);
+      dateOnly = rawDate.split('T')[0].split(' ')[0]; // Handle both datetime and date strings
+      console.log('✅ Using last_update:', dateOnly, 'from raw:', rawDate);
+    } 
+    // Second priority: updated_at timestamp
+    else if (equipment.updated_at) {
       try {
         const updatedDate = new Date(equipment.updated_at);
         if (!isNaN(updatedDate.getTime())) {
@@ -1524,8 +1551,9 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
       } catch (error) {
         console.error('Error parsing updated_at:', error, 'Value:', equipment.updated_at);
       }
-    } else if (equipment.lastUpdate) {
-      // Try to parse lastUpdate if it's a formatted date string
+    } 
+    // Third priority: lastUpdate formatted string
+    else if (equipment.lastUpdate) {
       try {
         const parsedDate = new Date(equipment.lastUpdate);
         if (!isNaN(parsedDate.getTime())) {
@@ -1539,11 +1567,22 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
         console.error('Error parsing lastUpdate:', error, 'Value:', equipment.lastUpdate);
       }
     }
+    
+    // Always set the date if we found one, or clear it if we didn't
     if (dateOnly) {
-      console.log('📅 Setting overviewLastUpdateRaw for', equipment.id, ':', dateOnly);
-      setOverviewLastUpdateRaw(prev => ({ ...prev, [equipment.id]: dateOnly }));
+      console.log('📅 handleEditEquipment - Setting overviewLastUpdateRaw for', equipment.id, ':', dateOnly);
+      setOverviewLastUpdateRaw(prev => {
+        // Force update to ensure the date is set
+        return { ...prev, [equipment.id]: dateOnly };
+      });
     } else {
-      console.warn('⚠️ No date value found for equipment:', equipment.id);
+      console.warn('⚠️ handleEditEquipment - No date value found for equipment:', equipment.id);
+      // Clear any existing value to show empty picker
+      setOverviewLastUpdateRaw(prev => {
+        const updated = { ...prev };
+        delete updated[equipment.id];
+        return updated;
+      });
     }
 
     // Convert nextMilestoneDate to date format (YYYY-MM-DD)
@@ -1979,16 +2018,17 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
       // Refresh equipment data from database to ensure consistency
       await refreshEquipmentData();
 
+      // Preserve the saved date in overviewLastUpdateRaw so it displays correctly
+      // The date was saved as last_update, so we keep it in state for display
+      const savedDate = lastUpdateValue ? lastUpdateValue.split('T')[0] : 
+                       (equipmentData.last_update ? equipmentData.last_update.split('T')[0] : null);
+      if (savedDate) {
+        setOverviewLastUpdateRaw(prev => ({ ...prev, [editingEquipmentId]: savedDate }));
+      }
+
       // Reset edit mode
       setEditingEquipmentId(null);
       setEditFormData({});
-      
-      // Clear overview date inputs for the edited equipment
-      setOverviewLastUpdateRaw(prev => {
-        const updated = { ...prev };
-        delete updated[editingEquipmentId];
-        return updated;
-      });
       
       // Clear custom field inputs
       setNewFieldName('');
@@ -7344,7 +7384,28 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                               <Label className="text-xs text-gray-600">Last Updated On</Label>
                               <Input
                                 type="date"
-                                value={overviewLastUpdateRaw[item.id] ? overviewLastUpdateRaw[item.id].split('T')[0] : ''}
+                                value={(() => {
+                                  // Priority 1: Use overviewLastUpdateRaw if available (user input or initialized)
+                                  if (overviewLastUpdateRaw[item.id]) {
+                                    const rawValue = overviewLastUpdateRaw[item.id];
+                                    const dateValue = rawValue.split('T')[0].split(' ')[0]; // Handle both datetime and date strings
+                                    if (dateValue && dateValue.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                                      return dateValue;
+                                    }
+                                  }
+                                  // Priority 2: Fall back to equipment's last_update field from database
+                                  // Note: This fallback ensures the date shows even if overviewLastUpdateRaw isn't set yet
+                                  // The useEffect and handleEditEquipment should set overviewLastUpdateRaw, but this provides a safety net
+                                  const equipment = localEquipment.find(eq => eq.id === item.id);
+                                  if (equipment && (equipment as any).last_update) {
+                                    const rawDate = String((equipment as any).last_update);
+                                    const dateValue = rawDate.split('T')[0].split(' ')[0]; // Handle both datetime and date strings
+                                    if (dateValue && dateValue.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                                      return dateValue;
+                                    }
+                                  }
+                                  return '';
+                                })()}
                                 onChange={(e) => {
                                   const raw = e.target.value;
                                   // Store as date only (YYYY-MM-DD)
@@ -7357,11 +7418,15 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                                 className="text-xs h-8"
                               />
                               <p className="text-[11px] text-gray-400 mt-1">Reference date shown to the team</p>
-                              {overviewLastUpdateRaw[item.id] && (
-                                <p className="text-[11px] text-blue-500 mt-1">
-                                  {formatDateOnly(overviewLastUpdateRaw[item.id].split('T')[0])}
-                                </p>
-                              )}
+                              {(() => {
+                                const displayValue = overviewLastUpdateRaw[item.id] || 
+                                  (localEquipment.find(eq => eq.id === item.id) as any)?.last_update;
+                                return displayValue ? (
+                                  <p className="text-[11px] text-blue-500 mt-1">
+                                    {formatDateOnly(String(displayValue).split('T')[0])}
+                                  </p>
+                                ) : null;
+                              })()}
                             </div>
                             <div>
                               <Label className="text-xs text-gray-600">Next Milestone Date</Label>

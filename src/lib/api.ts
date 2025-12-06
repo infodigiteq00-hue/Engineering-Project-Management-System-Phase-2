@@ -1605,6 +1605,68 @@ export const fastAPI = {
     }
   },
 
+  // Upload company logo to Supabase storage
+  async uploadCompanyLogo(file: File, firmId: string): Promise<string> {
+    try {
+      // Validate file type (images and PDF)
+      const validTypes = [
+        'image/jpeg',
+        'image/jpg',
+        'image/png',
+        'image/gif',
+        'image/webp',
+        'image/svg+xml',
+        'application/pdf'
+      ];
+      
+      if (!validTypes.includes(file.type)) {
+        throw new Error('Invalid file type. Please upload PNG, JPG, GIF, WebP, SVG, or PDF files only.');
+      }
+      
+      // Validate file size (max 5MB)
+      const maxSize = 5 * 1024 * 1024; // 5MB
+      if (file.size > maxSize) {
+        throw new Error('File size too large. Maximum size is 5MB.');
+      }
+      
+      const fileExt = file.name.split('.').pop()?.toLowerCase();
+      const fileName = `logo-${Date.now()}-${Math.random().toString(36).substr(2, 5)}.${fileExt}`;
+      const filePath = `company-logos/${firmId}/${fileName}`;
+      const bucket = 'project-documents'; // Using existing bucket, or create a 'company-assets' bucket
+      
+      // Upload to Supabase storage
+      const { data, error } = await supabase.storage
+        .from(bucket)
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: true // Allow overwriting existing logo
+        });
+      
+      if (error) {
+        console.error('❌ Logo upload error:', error);
+        throw new Error(`Logo upload failed: ${error.message}`);
+      }
+      
+      // Get public URL
+      const { data: urlData } = supabase.storage
+        .from(bucket)
+        .getPublicUrl(filePath);
+      
+      const logoUrl = urlData.publicUrl;
+      
+      // Update firm record with logo URL
+      await api.patch(`/firms?id=eq.${firmId}`, {
+        logo_url: logoUrl,
+        updated_at: new Date().toISOString()
+      });
+      
+      return logoUrl;
+    } catch (error: any) {
+      console.error('❌ Error uploading company logo:', error);
+      throw error;
+    }
+  },
+
   // Upload file to Supabase storage (PERFECT SETUP)
   async uploadFileToStorage(file: File, equipmentId: string, bucket: string = 'project-documents'): Promise<string> {
     try {
@@ -1743,6 +1805,79 @@ export const fastAPI = {
     }
   },
 
+  // Get all progress images (for company highlights - Key Progress section)
+  async getAllProgressImages(startDate?: string, endDate?: string, projectIds?: string[]) {
+    try {
+      // Fetch progress images with equipment and projects
+      let url = `/equipment_progress_images?select=*,equipment:equipment_id(id,tag_number,type,name,project_id,projects:project_id(id,name))&order=created_at.desc`;
+      if (startDate) {
+        url += `&created_at=gte.${startDate}`;
+      }
+      if (endDate) {
+        url += `&created_at=lte.${endDate}`;
+      }
+      // Note: PostgREST doesn't support filtering nested relationships directly
+      // Project filtering is handled client-side after fetching
+      const response = await api.get(url);
+      const images = Array.isArray(response.data) ? response.data : [];
+      
+      // Fetch user data separately for images that have uploaded_by (if it's a UUID)
+      // uploaded_by is a text field, so it might be a UUID or a name
+      const uploadedByValues = images.map((img: any) => img.uploaded_by).filter(Boolean);
+      // Check if uploaded_by values look like UUIDs (36 characters with dashes)
+      const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const userIds = [...new Set(uploadedByValues.filter((val: string) => uuidPattern.test(val)))];
+      let usersMap: Record<string, any> = {};
+      
+      if (userIds.length > 0) {
+        try {
+          const usersResponse = await api.get(`/users?id=in.(${userIds.join(',')})&select=id,full_name,email`);
+          const users = Array.isArray(usersResponse.data) ? usersResponse.data : [];
+          usersMap = users.reduce((acc: any, user: any) => {
+            acc[user.id] = { full_name: user.full_name, email: user.email };
+            return acc;
+          }, {});
+        } catch (userError) {
+          console.warn('⚠️ Could not fetch user data:', userError);
+        }
+      }
+      
+      // Merge user data into images and transform to match expected format
+      return images.map((img: any) => {
+        const uploadedBy = img.uploaded_by;
+        const isUuid = uploadedBy && uuidPattern.test(uploadedBy);
+        const userInfo = isUuid && uploadedBy ? usersMap[uploadedBy] : null;
+        
+        return {
+          id: img.id,
+          image_url: img.image_url,
+          image: img.image_url, // For compatibility
+          description: img.description,
+          image_description: img.description, // For compatibility
+          audio_data: img.audio_data,
+          audio: img.audio_data, // For compatibility
+          audio_duration: img.audio_duration,
+          audioDuration: img.audio_duration, // For compatibility
+          created_at: img.created_at || img.upload_date,
+          uploadDate: img.upload_date || img.created_at,
+          upload_date: img.upload_date || img.created_at,
+          uploaded_by: uploadedBy,
+          created_by: uploadedBy, // For compatibility
+          created_by_user: userInfo || (uploadedBy && !isUuid ? { full_name: uploadedBy } : null),
+          equipment: img.equipment || {
+            id: img.equipment_id,
+            tag_number: 'N/A',
+            type: 'Equipment',
+            project_id: null
+          }
+        };
+      });
+    } catch (error: any) {
+      console.error('❌ Error fetching all progress images:', error);
+      return [];
+    }
+  },
+
   // Get all VDCR documents with approval status (for company highlights)
   async getAllVDCRDocuments(startDate?: string, endDate?: string, projectIds?: string[]) {
     try {
@@ -1787,7 +1922,8 @@ export const fastAPI = {
   async getAllEquipmentNearingCompletion(startDate?: string, endDate?: string, projectIds?: string[]) {
     try {
       // Fetch all equipment with po_cdd dates (including nulls, we'll filter in component)
-      let url = `/equipment?select=id,tag_number,type,name,progress,po_cdd,next_milestone,project_id,projects(id,name)&order=po_cdd.asc.nullsfirst`;
+      // Include project status to filter out completed projects
+      let url = `/equipment?select=id,tag_number,type,name,progress,po_cdd,next_milestone,project_id,projects(id,name,status)&order=po_cdd.asc.nullsfirst`;
       // Only apply date filters if both are provided (for other use cases)
       // For timeline view, we don't pass dates, so it fetches all equipment
       if (startDate && endDate) {

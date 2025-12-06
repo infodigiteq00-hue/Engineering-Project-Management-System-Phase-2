@@ -19,7 +19,9 @@ import {
   X,
   Check,
   AlertCircle,
-  LogOut
+  LogOut,
+  Upload,
+  Image as ImageIcon
 } from "lucide-react";
 import { useNavigate } from 'react-router-dom';
 
@@ -35,6 +37,7 @@ interface Company {
   admin_email?: string;
   admin_phone?: string;
   admin_whatsapp?: string;
+  logo_url?: string | null;
 }
 
 interface User {
@@ -129,7 +132,11 @@ const SuperAdminDashboard = () => {
     admin_phone: '',
     admin_whatsapp: ''
   });
+  const [newCompanyLogo, setNewCompanyLogo] = useState<File | null>(null);
+  const [newCompanyLogoPreview, setNewCompanyLogoPreview] = useState<string | null>(null);
   const [editingCompany, setEditingCompany] = useState<Company | null>(null);
+  const [editingCompanyLogo, setEditingCompanyLogo] = useState<File | null>(null);
+  const [editingCompanyLogoPreview, setEditingCompanyLogoPreview] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -165,7 +172,8 @@ const SuperAdminDashboard = () => {
           admin_name: adminName,
           admin_email: adminEmail,
           admin_phone: company.admin_phone || '',
-          admin_whatsapp: company.admin_whatsapp || ''
+          admin_whatsapp: company.admin_whatsapp || '',
+          logo_url: company.logo_url || null
         };
       }) || [];
 
@@ -197,6 +205,22 @@ const SuperAdminDashboard = () => {
 
       // console.log('✅ Company created:', companyData);
       const firmId = companyData[0]?.id || companyData.id;
+
+      // Upload logo if provided
+      if (newCompanyLogo) {
+        try {
+          const logoUrl = await fastAPI.uploadCompanyLogo(newCompanyLogo, firmId);
+          // Update company with logo URL
+          await fastAPI.updateCompany(firmId, { logo_url: logoUrl });
+        } catch (logoError) {
+          console.error('⚠️ Error uploading logo (company still created):', logoError);
+          toast({ 
+            title: 'Warning', 
+            description: 'Company created successfully, but logo upload failed. You can add it later.', 
+            variant: 'default' 
+          });
+        }
+      }
 
       // 🆕 Skip user creation for now - just proceed with invite
       // console.log('🔍 Skipping user creation, proceeding with invite...');
@@ -265,6 +289,8 @@ const SuperAdminDashboard = () => {
         admin_phone: '',
         admin_whatsapp: ''
       });
+      setNewCompanyLogo(null);
+      setNewCompanyLogoPreview(null);
       setShowCreateCompany(false);
       await fetchData();
 
@@ -288,6 +314,8 @@ const SuperAdminDashboard = () => {
 
   const handleEditCompany = async (company: Company) => {
     setEditingCompany(company);
+    setEditingCompanyLogo(null);
+    setEditingCompanyLogoPreview(company.logo_url || null);
   };
 
   const handleUpdateCompany = async () => {
@@ -296,6 +324,21 @@ const SuperAdminDashboard = () => {
     try {
       setUpdatingCompany(true);
       // Updating company
+
+      // Upload new logo if provided
+      let logoUrl = editingCompany.logo_url;
+      if (editingCompanyLogo) {
+        try {
+          logoUrl = await fastAPI.uploadCompanyLogo(editingCompanyLogo, editingCompany.id);
+        } catch (logoError) {
+          console.error('⚠️ Error uploading logo (company still updated):', logoError);
+          toast({ 
+            title: 'Warning', 
+            description: 'Company updated successfully, but logo upload failed. You can try again later.', 
+            variant: 'default' 
+          });
+        }
+      }
 
       // Update company in firms table
       await fastAPI.updateCompany(editingCompany.id, {
@@ -306,7 +349,8 @@ const SuperAdminDashboard = () => {
         admin_name: editingCompany.admin_name,
         admin_email: editingCompany.admin_email,
         admin_phone: editingCompany.admin_phone,
-        admin_whatsapp: editingCompany.admin_whatsapp
+        admin_whatsapp: editingCompany.admin_whatsapp,
+        logo_url: logoUrl
       });
 
       // Update admin user if name or email changed
@@ -321,6 +365,8 @@ const SuperAdminDashboard = () => {
       }
 
       setEditingCompany(null);
+      setEditingCompanyLogo(null);
+      setEditingCompanyLogoPreview(null);
       await fetchData();
       toast({ title: 'Success', description: 'Company updated successfully!' });
     } catch (error) {
@@ -736,6 +782,84 @@ const SuperAdminDashboard = () => {
                   placeholder="Enter admin WhatsApp"
                 />
               </div>
+
+              {/* Company Logo Upload */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Company Logo (Optional)</label>
+                <div className="space-y-3">
+                  {newCompanyLogoPreview ? (
+                    <div className="relative">
+                      <div className="bg-white border-2 border-gray-200 rounded-lg p-4 flex items-center justify-center min-h-[120px]">
+                        {newCompanyLogoPreview.toLowerCase().endsWith('.pdf') ? (
+                          <div className="flex flex-col items-center">
+                            <svg className="w-12 h-12 text-red-600" fill="currentColor" viewBox="0 0 20 20">
+                              <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
+                            </svg>
+                            <span className="text-xs text-gray-600 mt-2">PDF Logo</span>
+                          </div>
+                        ) : (
+                          <img 
+                            src={newCompanyLogoPreview} 
+                            alt="Logo preview" 
+                            className="max-w-full max-h-[100px] object-contain"
+                            style={{ width: 'auto', height: 'auto' }}
+                          />
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNewCompanyLogo(null);
+                          setNewCompanyLogoPreview(null);
+                        }}
+                        className="absolute top-2 right-2 bg-red-500 text-white rounded-full p-1 hover:bg-red-600"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 transition-colors">
+                      <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                        <Upload className="w-8 h-8 mb-2 text-gray-400" />
+                        <p className="mb-2 text-sm text-gray-500">
+                          <span className="font-semibold">Click to upload</span> or drag and drop
+                        </p>
+                        <p className="text-xs text-gray-500">PNG, JPG, PDF (MAX. 5MB)</p>
+                      </div>
+                      <input
+                        type="file"
+                        className="hidden"
+                        accept="image/png,image/jpeg,image/jpg,image/gif,image/webp,image/svg+xml,application/pdf"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            // Validate file size (5MB max)
+                            if (file.size > 5 * 1024 * 1024) {
+                              toast({ 
+                                title: 'Error', 
+                                description: 'File size too large. Maximum size is 5MB.', 
+                                variant: 'destructive' 
+                              });
+                              return;
+                            }
+                            setNewCompanyLogo(file);
+                            // Create preview
+                            if (file.type.startsWith('image/')) {
+                              const reader = new FileReader();
+                              reader.onloadend = () => {
+                                setNewCompanyLogoPreview(reader.result as string);
+                              };
+                              reader.readAsDataURL(file);
+                            } else if (file.type === 'application/pdf') {
+                              setNewCompanyLogoPreview('pdf');
+                            }
+                          }
+                        }}
+                      />
+                    </label>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div className="flex gap-3 mt-6">
@@ -859,6 +983,112 @@ const SuperAdminDashboard = () => {
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
+
+              {/* Company Logo Upload */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Company Logo</label>
+                <div className="space-y-3">
+                  {(editingCompanyLogoPreview || editingCompany?.logo_url) ? (
+                    <div className="relative">
+                      <div className="bg-white border-2 border-gray-200 rounded-lg p-4 flex items-center justify-center min-h-[120px]">
+                        {(editingCompanyLogoPreview && editingCompanyLogoPreview !== 'pdf' && !editingCompanyLogoPreview.startsWith('http')) ? (
+                          // New logo preview (local file)
+                          editingCompanyLogoPreview.toLowerCase().endsWith('.pdf') ? (
+                            <div className="flex flex-col items-center">
+                              <svg className="w-12 h-12 text-red-600" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
+                              </svg>
+                              <span className="text-xs text-gray-600 mt-2">PDF Logo</span>
+                            </div>
+                          ) : (
+                            <img 
+                              src={editingCompanyLogoPreview} 
+                              alt="Logo preview" 
+                              className="max-w-full max-h-[100px] object-contain"
+                              style={{ width: 'auto', height: 'auto' }}
+                            />
+                          )
+                        ) : (
+                          // Existing logo from database
+                          editingCompany?.logo_url && (
+                            editingCompany.logo_url.toLowerCase().endsWith('.pdf') ? (
+                              <div className="flex flex-col items-center">
+                                <svg className="w-12 h-12 text-red-600" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
+                                </svg>
+                                <span className="text-xs text-gray-600 mt-2">PDF Logo</span>
+                              </div>
+                            ) : (
+                              <img 
+                                src={editingCompany.logo_url} 
+                                alt="Company Logo" 
+                                className="max-w-full max-h-[100px] object-contain"
+                                style={{ width: 'auto', height: 'auto' }}
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).style.display = 'none';
+                                }}
+                              />
+                            )
+                          )
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingCompanyLogo(null);
+                          setEditingCompanyLogoPreview(null);
+                          if (editingCompany) {
+                            setEditingCompany({ ...editingCompany, logo_url: null });
+                          }
+                        }}
+                        className="absolute top-2 right-2 bg-red-500 text-white rounded-full p-1 hover:bg-red-600"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-lg cursor-pointer bg-gray-50 hover:bg-gray-100 transition-colors">
+                      <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                        <Upload className="w-8 h-8 mb-2 text-gray-400" />
+                        <p className="mb-2 text-sm text-gray-500">
+                          <span className="font-semibold">Click to upload</span> or drag and drop
+                        </p>
+                        <p className="text-xs text-gray-500">PNG, JPG, PDF (MAX. 5MB)</p>
+                      </div>
+                      <input
+                        type="file"
+                        className="hidden"
+                        accept="image/png,image/jpeg,image/jpg,image/gif,image/webp,image/svg+xml,application/pdf"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            // Validate file size (5MB max)
+                            if (file.size > 5 * 1024 * 1024) {
+                              toast({ 
+                                title: 'Error', 
+                                description: 'File size too large. Maximum size is 5MB.', 
+                                variant: 'destructive' 
+                              });
+                              return;
+                            }
+                            setEditingCompanyLogo(file);
+                            // Create preview
+                            if (file.type.startsWith('image/')) {
+                              const reader = new FileReader();
+                              reader.onloadend = () => {
+                                setEditingCompanyLogoPreview(reader.result as string);
+                              };
+                              reader.readAsDataURL(file);
+                            } else if (file.type === 'application/pdf') {
+                              setEditingCompanyLogoPreview('pdf');
+                            }
+                          }
+                        }}
+                      />
+                    </label>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div className="flex gap-3 mt-6">
@@ -877,7 +1107,11 @@ const SuperAdminDashboard = () => {
                 )}
               </Button>
               <Button
-                onClick={() => setEditingCompany(null)}
+                onClick={() => {
+                  setEditingCompany(null);
+                  setEditingCompanyLogo(null);
+                  setEditingCompanyLogoPreview(null);
+                }}
                 variant="outline"
                 className="flex-1"
                 disabled={updatingCompany}

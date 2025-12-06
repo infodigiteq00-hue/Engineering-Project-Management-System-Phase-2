@@ -173,18 +173,30 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
     };
   }, [timePeriod, customDateRange]);
 
-  // Fetch production updates (equipment progress entries)
+  // Fetch production updates (progress images for Key Progress, progress entries for All Updates)
   useEffect(() => {
     const fetchProductionUpdates = async () => {
       setLoading(true);
       try {
-        const entries = await fastAPI.getAllProgressEntries(
-          getDateRange.start, 
-          getDateRange.end,
-          userRole === 'firm_admin' ? undefined : assignedProjectIds
-        );
-        const filteredEntries = filterByAssignedProjects(entries, 'equipment.project_id');
-        setProductionUpdates(Array.isArray(filteredEntries) ? filteredEntries : []);
+        if (productionSubTab === 'key-progress') {
+          // Fetch progress images for Key Progress tab
+          const images = await fastAPI.getAllProgressImages(
+            getDateRange.start, 
+            getDateRange.end,
+            userRole === 'firm_admin' ? undefined : assignedProjectIds
+          );
+          const filteredImages = filterByAssignedProjects(images, 'equipment.project_id');
+          setProductionUpdates(Array.isArray(filteredImages) ? filteredImages : []);
+        } else {
+          // Fetch progress entries for All Updates tab
+          const entries = await fastAPI.getAllProgressEntries(
+            getDateRange.start, 
+            getDateRange.end,
+            userRole === 'firm_admin' ? undefined : assignedProjectIds
+          );
+          const filteredEntries = filterByAssignedProjects(entries, 'equipment.project_id');
+          setProductionUpdates(Array.isArray(filteredEntries) ? filteredEntries : []);
+        }
       } catch (error) {
         console.error('Error fetching production updates:', error);
         setProductionUpdates([]);
@@ -196,7 +208,7 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
     if (isExpanded && activeTab === 'production' && canSeeTab('production')) {
       fetchProductionUpdates();
     }
-  }, [getDateRange, isExpanded, activeTab, userRole, assignedProjectIds]);
+  }, [getDateRange, isExpanded, activeTab, productionSubTab, userRole, assignedProjectIds]);
 
   // Fetch equipment card updates (equipment_updated activity logs)
   useEffect(() => {
@@ -338,20 +350,10 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
 
   // Filter production updates by subtab
   const filteredProductionUpdates = useMemo(() => {
-    if (productionSubTab === 'key-progress') {
-      // Show ONLY equipment progress entries (from equipment_progress_entries table)
-      // These are progress-related entries like welding, material, inspection, assembly, testing, etc.
-      // Exclude 'update' type which is for equipment card updates
-      return productionUpdates.filter((entry: any) => {
-        const entryType = entry.entry_type?.toLowerCase() || entry.type?.toLowerCase() || '';
-        // Exclude 'update' type as that's for equipment card updates, not progress
-        return entryType !== 'update' && entryType !== 'general' && entryType !== 'comment';
-      });
-    } else {
-      // Show ONLY equipment card updates (from equipment_activity_logs with activity_type='equipment_updated')
-      return equipmentCardUpdates;
-    }
-  }, [productionUpdates, equipmentCardUpdates, productionSubTab]);
+    // Key Progress shows progress images (already filtered in fetchProductionUpdates)
+    // All Updates shows progress entries (already filtered in fetchProductionUpdates)
+    return productionUpdates;
+  }, [productionUpdates, productionSubTab]);
 
   // Fetch documentation updates - only those with status changes
   useEffect(() => {
@@ -442,17 +444,26 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
     const refreshData = async () => {
       if (activeTab === 'production' && canSeeTab('production')) {
         try {
-          // Refresh progress entries
-          const entries = await fastAPI.getAllProgressEntries(
-            getDateRange.start, 
-            getDateRange.end,
-            userRole === 'firm_admin' ? undefined : assignedProjectIds
-          );
-          const filteredEntries = filterByAssignedProjects(entries, 'equipment.project_id');
-          setProductionUpdates(Array.isArray(filteredEntries) ? filteredEntries : []);
-          
-          // Refresh equipment card updates if on all-updates tab
-          if (productionSubTab === 'all-updates') {
+          if (productionSubTab === 'key-progress') {
+            // Refresh progress images for Key Progress tab
+            const images = await fastAPI.getAllProgressImages(
+              getDateRange.start, 
+              getDateRange.end,
+              userRole === 'firm_admin' ? undefined : assignedProjectIds
+            );
+            const filteredImages = filterByAssignedProjects(images, 'equipment.project_id');
+            setProductionUpdates(Array.isArray(filteredImages) ? filteredImages : []);
+          } else {
+            // Refresh progress entries for All Updates tab
+            const entries = await fastAPI.getAllProgressEntries(
+              getDateRange.start, 
+              getDateRange.end,
+              userRole === 'firm_admin' ? undefined : assignedProjectIds
+            );
+            const filteredEntries = filterByAssignedProjects(entries, 'equipment.project_id');
+            setProductionUpdates(Array.isArray(filteredEntries) ? filteredEntries : []);
+            
+            // Also refresh equipment card updates for All Updates tab
             const projectIds = userRole === 'firm_admin' ? undefined : assignedProjectIds;
             const allUpdates: any[] = [];
             
@@ -831,7 +842,7 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
 
                     {filteredProductionUpdates.length === 0 ? (
                       <div className="text-center py-6 sm:py-8 md:py-10 text-gray-500">
-                        <p className="text-xs sm:text-sm md:text-base">No {productionSubTab === 'key-progress' ? 'equipment progress entries' : 'equipment card updates'} found for the selected time period.</p>
+                        <p className="text-xs sm:text-sm md:text-base">No {productionSubTab === 'key-progress' ? 'progress images' : 'progress entries'} found for the selected time period.</p>
                       </div>
                     ) : (
                       <div className="h-[280px] xs:h-[320px] sm:h-[360px] md:h-[400px] overflow-y-auto space-y-2 sm:space-y-3 md:space-y-4 pr-1 sm:pr-2 company-highlights-scrollbar">
@@ -855,9 +866,9 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
                                 e.stopPropagation();
                                 setShowProgressImageModal({
                                   url: entry.image_url || entry.image,
-                                  description: entry.image_description || entry.imageDescription,
-                                  uploadedBy: entry.created_by_user?.full_name || entry.created_by || 'Unknown User',
-                                  uploadDate: entry.created_at || entry.uploadDate
+                                  description: entry.image_description || entry.description || entry.imageDescription,
+                                  uploadedBy: entry.created_by_user?.full_name || entry.uploaded_by || entry.created_by || 'Unknown User',
+                                  uploadDate: entry.created_at || entry.uploadDate || entry.upload_date
                                 });
                               }}
                             >
@@ -884,18 +895,18 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
                               </p>
                             </div>
                             <p className="text-[10px] xs:text-xs sm:text-sm md:text-base text-gray-600 mb-1.5 sm:mb-2 line-clamp-2">
-                              {entry.entry_text || entry.comment || entry.entry_type || 'Progress update'}
+                              {entry.entry_text || entry.description || entry.comment || entry.entry_type || 'Progress update'}
                             </p>
                             <div className="flex items-center flex-wrap gap-1 sm:gap-2 text-[10px] xs:text-xs sm:text-sm text-gray-500">
                               <span className="truncate">{entry.equipment?.projects?.name || 'Unknown Project'}</span>
                               <span>•</span>
-                              <span className="whitespace-nowrap">{formatTimeAgo(entry.created_at || entry.uploadDate || new Date().toISOString())}</span>
-                              {entry.created_by_user?.full_name && (
+                              <span className="whitespace-nowrap">{formatTimeAgo(entry.created_at || entry.uploadDate || entry.upload_date || new Date().toISOString())}</span>
+                              {(entry.created_by_user?.full_name || entry.uploaded_by) && (
                                 <>
                                   <span>•</span>
                                   <span className="flex items-center gap-0.5 sm:gap-1">
                                     <User className="w-2.5 h-2.5 xs:w-3 xs:h-3 sm:w-3.5 sm:h-3.5" />
-                                    <span className="truncate">{entry.created_by_user.full_name}</span>
+                                    <span className="truncate">{entry.created_by_user?.full_name || entry.uploaded_by || 'Unknown User'}</span>
                                   </span>
                                 </>
                               )}
