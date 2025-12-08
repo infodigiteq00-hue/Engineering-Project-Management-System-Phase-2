@@ -8,3 +8,4 @@ ADD COLUMN IF NOT EXISTS logo_url TEXT;
 COMMENT ON COLUMN public.firms.logo_url IS 'URL or path to company logo image for branding display';
 
 
+
