@@ -541,6 +541,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
     return [];
   });
   const [imageMetadata, setImageMetadata] = useState<Record<string, Array<{ id: string, description: string, uploadedBy: string, uploadDate: string }>>>({});
+  const [isLoadingProgressImages, setIsLoadingProgressImages] = useState(false);
   
   // Performance optimization: Debouncing and request cancellation for refreshEquipmentData
   const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -1200,10 +1201,13 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
       try {
         devLog('🔄 refreshEquipmentData: Starting refresh for project:', projectId);
         
-        // Check if this is standalone equipment
-        const freshEquipment = projectId === 'standalone' 
-          ? await fastAPI.getStandaloneEquipment() 
-          : await fastAPI.getEquipmentByProject(projectId);
+        // Set loading state for progress images
+        setIsLoadingProgressImages(true);
+        
+      // Check if this is standalone equipment
+      const freshEquipment = projectId === 'standalone' 
+        ? await fastAPI.getStandaloneEquipment() 
+        : await fastAPI.getEquipmentByProject(projectId);
         
         // Check if request was aborted
         if (abortController.signal.aborted) {
@@ -1213,10 +1217,10 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
         
         devLog('🔄 refreshEquipmentData: Fresh equipment data received, type:', typeof freshEquipment, 'isArray:', Array.isArray(freshEquipment));
 
-        // Ensure freshEquipment is an array
-        const equipmentArray = Array.isArray(freshEquipment) ? freshEquipment : [];
+      // Ensure freshEquipment is an array
+      const equipmentArray = Array.isArray(freshEquipment) ? freshEquipment : [];
         devLog('🔄 refreshEquipmentData: Equipment array length:', equipmentArray.length);
-        const transformedEquipment = transformEquipmentDataCallback(equipmentArray);
+      const transformedEquipment = transformEquipmentDataCallback(equipmentArray);
         devLog('🔄 refreshEquipmentData: Transformed equipment count:', transformedEquipment.length);
         
         // Check again if request was aborted before updating state
@@ -1224,20 +1228,20 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
           devLog('⏹️ refreshEquipmentData: Request aborted before state update');
           return;
         }
-        
-        // Post-process: For standalone equipment, ensure status is 'active' (not 'pending')
-        // This handles both new equipment (which should already be 'active') and old equipment
-        if (projectId === 'standalone') {
-          transformedEquipment.forEach((eq: Equipment) => {
-            if (eq.status === 'pending' || !eq.status) {
-              eq.status = 'active';
-            }
-          });
-        }
+      
+      // Post-process: For standalone equipment, ensure status is 'active' (not 'pending')
+      // This handles both new equipment (which should already be 'active') and old equipment
+      if (projectId === 'standalone') {
+        transformedEquipment.forEach((eq: Equipment) => {
+          if (eq.status === 'pending' || !eq.status) {
+            eq.status = 'active';
+          }
+        });
+      }
 
         // Update the local equipment state - THIS IS CRITICAL FOR UI UPDATE
         devLog('🔄 refreshEquipmentData: Updating localEquipment state with', transformedEquipment.length, 'items');
-        setLocalEquipment(transformedEquipment);
+      setLocalEquipment(transformedEquipment);
         devLog('✅ refreshEquipmentData: localEquipment state updated');
 
       // Update custom fields state with fresh data
@@ -1284,21 +1288,26 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
 
       devLog('✅ refreshEquipmentData: Completed successfully');
       
+      // Clear loading state for progress images
+      setIsLoadingProgressImages(false);
+      
       // Clear abort controller reference
       if (refreshAbortControllerRef.current === abortController) {
         refreshAbortControllerRef.current = null;
       }
 
-    } catch (error: any) {
-      // Don't log aborted requests as errors
-      if (error?.name !== 'AbortError' && !abortController.signal.aborted) {
-        devError('❌ Error refreshing equipment data:', error);
+      } catch (error: any) {
+        // Don't log aborted requests as errors
+        if (error?.name !== 'AbortError' && !abortController.signal.aborted) {
+          devError('❌ Error refreshing equipment data:', error);
+        }
+        // Clear loading state on error
+        setIsLoadingProgressImages(false);
+        // Clear abort controller reference on error
+        if (refreshAbortControllerRef.current === abortController) {
+          refreshAbortControllerRef.current = null;
+        }
       }
-      // Clear abort controller reference on error
-      if (refreshAbortControllerRef.current === abortController) {
-        refreshAbortControllerRef.current = null;
-      }
-    }
     };
 
     // Debounce: Wait 300ms before refreshing (unless immediate is true)
@@ -1312,6 +1321,15 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
       }, 300);
     }
   }, [projectId, transformEquipmentDataCallback]); // Memoized with projectId dependency
+
+  // CRITICAL FIX: Refresh equipment data on mount to ensure progress images are loaded
+  // The initial equipment prop might be stale and missing progress images
+  // This must be AFTER refreshEquipmentData is defined
+  useEffect(() => {
+    // Refresh equipment data immediately on mount to fetch latest progress images
+    refreshEquipmentData(true);
+  }, [projectId, refreshEquipmentData]);
+
   const [documents, setDocuments] = useState<Record<string, Array<{ id: string, file?: File, name: string, uploadedBy: string, uploadDate: string, document_url?: string, document_name?: string }>>>({});
   const [newDocumentName, setNewDocumentName] = useState('');
   const [documentPreview, setDocumentPreview] = useState<{ file: File, name: string } | null>(null);
@@ -1830,8 +1848,8 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
     setLoadingStates(prev => ({ ...prev, [`save-${editingEquipmentId}`]: true }));
 
     try {
-      // Save progress image if uploaded
-      if (newProgressImage && imageDescription) {
+      // Save progress image if uploaded (description is REQUIRED)
+      if (newProgressImage && imageDescription?.trim()) {
         // console.log('📸 Saving progress image with equipment data...');
 
         // Convert image to base64 for storage
@@ -1849,10 +1867,13 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
               : eq
           ));
 
+          // Description is required and validated above
+          const finalDescription = imageDescription.trim();
+
           // Store the image metadata
           const imageMetadata = {
             id: `img-${Date.now()}`,
-            description: imageDescription,
+            description: finalDescription,
               uploadedBy: (user as any)?.full_name || user?.email || localStorage.getItem('userName') || 'Unknown User',
             uploadDate: new Date().toISOString()
           };
@@ -1866,7 +1887,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
           const progressImageData = {
             equipment_id: editingEquipmentId,
             image_url: base64Image, // Store base64 instead of blob URL
-            description: imageDescription,
+            description: finalDescription,
             audio_data: imageAudioChunks.length > 0 ? await new Promise<string>((resolve, reject) => {
               const reader = new FileReader();
               reader.onload = (e) => resolve(e.target?.result as string);
@@ -1897,7 +1918,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                   editingEquipmentId,
                   currentEquipment.type || 'Equipment',
                   currentEquipment.tagNumber || 'Unknown',
-                  imageDescription || undefined
+                  finalDescription || undefined
                 );
                 // console.log('✅ Activity logged: Progress image uploaded');
                 
@@ -1919,12 +1940,19 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
 
         reader.readAsDataURL(newProgressImage);
 
-        // Clear progress image state
+        // Clear progress image state after successful upload
         setNewProgressImage(null);
         setImageDescription('');
 
         // Refresh equipment data to show the new progress image (immediate for image uploads)
         await refreshEquipmentData(true);
+      } else if (newProgressImage && !imageDescription?.trim()) {
+        // Show error if image is selected but description is missing
+        toast({ 
+          title: 'Description Required', 
+          description: 'Please add a description for the progress image before saving.', 
+          variant: 'destructive' 
+        });
       }
       // console.log('💾 Saving equipment updates:', editFormData);
       // console.log('💾 editFormData.customFields:', editFormData.customFields);
@@ -2068,7 +2096,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
         equipmentData.technical_sections = technicalSections[editingEquipmentId] || [];
         devWarn('⚠️ Using local technical sections only (could not fetch current data)');
       }
-      
+
       // Call backend API to update equipment
       // console.log('🔧 Sending equipment data to API:', equipmentData);
       // console.log('🔧 Custom fields in data:', equipmentData.custom_fields);
@@ -7304,7 +7332,19 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                         <div className="flex items-center justify-between gap-2">
                           {/* PO Number */}
                           {(() => {
-                            const poNumber = item.poNumber || (item as any).po_number || (item.custom_fields?.find((f: any) => f.name === 'PO Number')?.value) || item.poCdd;
+                            // For project equipment, use project's PO Number instead of equipment's PO-CDD
+                            let poNumber = item.poNumber || (item as any).po_number || (item.custom_fields?.find((f: any) => f.name === 'PO Number')?.value);
+                            
+                            // If no PO Number found and this is project equipment (not standalone), use project's PO Number
+                            if (!poNumber && projectId !== 'standalone' && currentProject?.po_number) {
+                              poNumber = currentProject.po_number;
+                            }
+                            
+                            // Only fall back to PO-CDD if still no PO Number found
+                            if (!poNumber) {
+                              poNumber = item.poCdd;
+                            }
+                            
                             return poNumber ? (
                           <div className="flex items-center gap-2">
                                 <div className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0"></div>
@@ -7469,11 +7509,15 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                         </div>
                         <div className="relative">
                           <Input
-                            placeholder="Describe what this image shows..."
+                            placeholder="Describe what this image shows (required)..."
                             value={imageDescription}
                             onChange={(e) => setImageDescription(e.target.value)}
                             className="text-sm pr-10"
+                            required
                           />
+                          {newProgressImage && !imageDescription?.trim() && (
+                            <p className="text-xs text-red-500 mt-1">Description is required to upload the image</p>
+                          )}
                           <button
                             type="button"
                             onClick={isImageRecording ? stopImageAudioRecording : startImageAudioRecording}
@@ -7535,7 +7579,19 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                       // View Mode - Show progress image
                       <div className="space-y-2">
                         <div className="text-sm font-medium text-gray-700">Progress Image</div>
-                        {item.progressImages && item.progressImages.length > 0 ? (
+                        {isLoadingProgressImages ? (
+                          <div className="w-full h-64 bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-dashed border-blue-200 rounded-lg flex items-center justify-center">
+                            <div className="text-center">
+                              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-3"></div>
+                              <p className="text-sm font-medium text-gray-700 mb-1">
+                                Fetching latest images of your equipment, straight from your plant...
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                This may take a few moments
+                              </p>
+                            </div>
+                          </div>
+                        ) : item.progressImages && item.progressImages.length > 0 ? (
                           <div className="space-y-2">
                             {/* Progress Image Display with Navigation */}
                             <div className="relative">

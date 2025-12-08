@@ -672,14 +672,26 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
     const refreshData = async () => {
       if (activeTab === 'production' && canSeeTab('production')) {
         try {
-          // Refresh progress entries
-          const entries = await fastAPI.getAllProgressEntries(
-            dateRangeStart, 
-            dateRangeEnd,
-            userRole === 'firm_admin' ? undefined : assignedProjectIds
-          );
-          const filteredEntries = filterByAssignedProjects(entries, 'equipment.project_id');
-          setProductionUpdates(Array.isArray(filteredEntries) ? filteredEntries : []);
+          // CRITICAL FIX: Check which subtab is active and fetch the correct data type
+          if (productionSubTab === 'key-progress') {
+            // Fetch progress images for Key Progress tab
+            const images = await fastAPI.getAllProgressImages(
+              dateRangeStart, 
+              dateRangeEnd,
+              userRole === 'firm_admin' ? undefined : assignedProjectIds
+            );
+            const filteredImages = filterByAssignedProjects(images, 'equipment.project_id');
+            setProductionUpdates(Array.isArray(filteredImages) ? filteredImages : []);
+          } else {
+            // Fetch progress entries for All Updates tab
+            const entries = await fastAPI.getAllProgressEntries(
+              dateRangeStart, 
+              dateRangeEnd,
+              userRole === 'firm_admin' ? undefined : assignedProjectIds
+            );
+            const filteredEntries = filterByAssignedProjects(entries, 'equipment.project_id');
+            setProductionUpdates(Array.isArray(filteredEntries) ? filteredEntries : []);
+          }
           
           // Refresh equipment card updates if on all-updates tab
           if (productionSubTab === 'all-updates') {
@@ -1159,7 +1171,7 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
                               </span>
                             )}
                             <p className="text-[10px] xs:text-xs sm:text-sm md:text-base text-gray-600 mb-1.5 sm:mb-2 line-clamp-2">
-                              {entry.entry_text || entry.comment || entry.entry_type || 'Progress update'}
+                              {entry.description || entry.image_description || entry.imageDescription || entry.entry_text || entry.comment || 'Progress update'}
                             </p>
                             <div className="flex items-center flex-wrap gap-1 sm:gap-2 text-[10px] xs:text-xs sm:text-sm text-gray-500">
                               <span className="truncate">{entry.equipment?.projects?.name || 'Unknown Project'}</span>
