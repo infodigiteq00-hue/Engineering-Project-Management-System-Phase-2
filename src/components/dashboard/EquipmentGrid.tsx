@@ -1241,6 +1241,13 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
 
         // Update the local equipment state - THIS IS CRITICAL FOR UI UPDATE
         devLog('🔄 refreshEquipmentData: Updating localEquipment state with', transformedEquipment.length, 'items');
+        
+        // Debug: Log progress images for first equipment item
+        if (transformedEquipment.length > 0) {
+          const firstEq = transformedEquipment[0];
+          devLog('🔄 refreshEquipmentData: First equipment progress images:', firstEq.progressImages?.length || 0, 'images');
+        }
+
       setLocalEquipment(transformedEquipment);
         devLog('✅ refreshEquipmentData: localEquipment state updated');
 
