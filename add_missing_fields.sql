@@ -64,3 +64,4 @@ ON public.standalone_equipment USING btree (equipment_manager) TABLESPACE pg_def
 
 
 
+

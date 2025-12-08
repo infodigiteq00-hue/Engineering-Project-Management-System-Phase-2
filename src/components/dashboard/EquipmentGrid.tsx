@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,18 @@ import axios from "axios";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+// Performance optimization: Only log in development mode
+const isDev = import.meta.env.DEV;
+const devLog = (...args: any[]) => {
+  if (isDev) console.log(...args);
+};
+const devError = (...args: any[]) => {
+  if (isDev) console.error(...args);
+};
+const devWarn = (...args: any[]) => {
+  if (isDev) console.warn(...args);
+};
 
 interface EquipmentGridProps {
   equipment: Equipment[];
@@ -126,7 +138,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
       const entries = await activityApi.getStandaloneEquipmentActivityLogsByEquipment(viewingEquipmentId);
       setEquipmentProgressEntries(entries as any[]);
     } catch (error) {
-      console.error('Error loading standalone equipment activity logs:', error);
+      devError('Error loading standalone equipment activity logs:', error);
       setEquipmentProgressEntries([]);
     } finally {
       setIsLoadingEquipmentLogs(false);
@@ -136,14 +148,14 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
   // Fetch team members for the viewing equipment
   const fetchEquipmentTeamMembers = useCallback(async () => {
     if (!viewingEquipmentId || projectId !== 'standalone') {
-      console.log('⏭️ Skipping fetchEquipmentTeamMembers:', { viewingEquipmentId, projectId });
+      devLog('⏭️ Skipping fetchEquipmentTeamMembers:', { viewingEquipmentId, projectId });
       return;
     }
     
     // OPTIMIZATION: Check cache first - use cached data immediately if available
     const hasCachedData = allEquipmentTeamMembers[viewingEquipmentId] && allEquipmentTeamMembers[viewingEquipmentId].length > 0;
     if (hasCachedData) {
-      console.log('⚡ Using cached team members for equipment:', viewingEquipmentId);
+      devLog('⚡ Using cached team members for equipment:', viewingEquipmentId);
       setTeamMembers(allEquipmentTeamMembers[viewingEquipmentId]);
       setTeamMembersLoading(false);
       // Still fetch in background to ensure data is fresh, but don't show loading
@@ -152,11 +164,11 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
     }
     
     try {
-      console.log('🔄 Fetching team members for equipment:', viewingEquipmentId);
+      devLog('🔄 Fetching team members for equipment:', viewingEquipmentId);
       // For standalone equipment, get team members from standalone_equipment_team_positions table
       const { DatabaseService } = await import('@/lib/database');
       const teamData = await DatabaseService.getStandaloneTeamPositions(viewingEquipmentId);
-      console.log('📥 Raw team data received:', teamData);
+      devLog('📥 Raw team data received:', teamData);
       
       const transformedMembers = (teamData as any[]).map((member, index) => ({
         id: member.id || `member-${index}`,
@@ -174,7 +186,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
         accessLevel: member.role || 'viewer'
       }));
       
-      console.log('✅ Transformed team members:', transformedMembers);
+      devLog('✅ Transformed team members:', transformedMembers);
       setTeamMembers(transformedMembers);
       // Also update allEquipmentTeamMembers state for this equipment (for equipment card team tab)
       if (viewingEquipmentId) {
@@ -183,12 +195,12 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
           [viewingEquipmentId]: transformedMembers
         }));
       }
-      console.log('✅ Team members state updated, count:', transformedMembers.length);
+      devLog('✅ Team members state updated, count:', transformedMembers.length);
     } catch (error) {
-      console.error('❌ Error fetching equipment team members:', error);
+      devError('❌ Error fetching equipment team members:', error);
       // If we have cached data, use it instead of showing empty
       if (hasCachedData) {
-        console.log('⚡ Using cached team members due to fetch error');
+        devLog('⚡ Using cached team members due to fetch error');
         setTeamMembers(allEquipmentTeamMembers[viewingEquipmentId]);
       } else {
       setTeamMembers([]);
@@ -243,7 +255,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
       const members = await fastAPI.getAllFirmTeamMembers(firmId);
       setExistingFirmMembers(members || []);
     } catch (error) {
-      console.error('Error fetching existing firm members:', error);
+      devError('Error fetching existing firm members:', error);
       setExistingFirmMembers([]);
     } finally {
       setIsLoadingExistingMembers(false);
@@ -529,6 +541,10 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
     return [];
   });
   const [imageMetadata, setImageMetadata] = useState<Record<string, Array<{ id: string, description: string, uploadedBy: string, uploadDate: string }>>>({});
+  
+  // Performance optimization: Debouncing and request cancellation for refreshEquipmentData
+  const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const refreshAbortControllerRef = useRef<AbortController | null>(null);
 
   // Load custom progress types from existing entries
   useEffect(() => {
@@ -575,7 +591,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
           // Use last_update directly if available (already in YYYY-MM-DD format)
           const rawDate = String((equipment as any).last_update);
           dateOnly = rawDate.split('T')[0].split(' ')[0]; // Handle both datetime and date strings
-          console.log('📅 useEffect - Using last_update:', dateOnly, 'from raw:', rawDate);
+          devLog('📅 useEffect - Using last_update:', dateOnly, 'from raw:', rawDate);
         } 
         // Second priority: updated_at timestamp
         else if (equipment.updated_at) {
@@ -586,10 +602,10 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
               const month = String(updatedDate.getMonth() + 1).padStart(2, '0');
               const day = String(updatedDate.getDate()).padStart(2, '0');
               dateOnly = `${year}-${month}-${day}`;
-              console.log('📅 useEffect - Using updated_at:', dateOnly);
+              devLog('📅 useEffect - Using updated_at:', dateOnly);
             }
           } catch (error) {
-            console.error('Error parsing updated_at in useEffect:', error);
+            devError('Error parsing updated_at in useEffect:', error);
           }
         } 
         // Third priority: lastUpdate formatted string
@@ -601,25 +617,25 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
               const month = String(parsedDate.getMonth() + 1).padStart(2, '0');
               const day = String(parsedDate.getDate()).padStart(2, '0');
               dateOnly = `${year}-${month}-${day}`;
-              console.log('📅 useEffect - Using lastUpdate:', dateOnly);
+              devLog('📅 useEffect - Using lastUpdate:', dateOnly);
             }
           } catch (error) {
-            console.error('Error parsing lastUpdate in useEffect:', error);
+            devError('Error parsing lastUpdate in useEffect:', error);
           }
         }
         
         // Always set the date if we found one (even if it matches current value, to ensure it's set)
         // This ensures the date picker shows the saved value when entering edit mode
         if (dateOnly) {
-          console.log('📅 useEffect - Setting overviewLastUpdateRaw for', editingEquipmentId, ':', dateOnly);
+          devLog('📅 useEffect - Setting overviewLastUpdateRaw for', editingEquipmentId, ':', dateOnly);
           setOverviewLastUpdateRaw(prev => {
             const currentValue = prev[editingEquipmentId];
             // Always update to ensure the date is set (even if it's the same)
             // This is important when entering edit mode for the first time
             if (currentValue !== dateOnly) {
-              console.log('📅 useEffect - Updating date from', currentValue || '(empty)', 'to', dateOnly);
+              devLog('📅 useEffect - Updating date from', currentValue || '(empty)', 'to', dateOnly);
             } else {
-              console.log('📅 useEffect - Date already set correctly:', dateOnly);
+              devLog('📅 useEffect - Date already set correctly:', dateOnly);
             }
             return { ...prev, [editingEquipmentId]: dateOnly };
           });
@@ -627,7 +643,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
           // If no date found, only clear if there's a value (don't create unnecessary state updates)
           setOverviewLastUpdateRaw(prev => {
             if (prev[editingEquipmentId]) {
-              console.log('📅 useEffect - Clearing date for', editingEquipmentId, '(no date found in equipment)');
+              devLog('📅 useEffect - Clearing date for', editingEquipmentId, '(no date found in equipment)');
               const updated = { ...prev };
               delete updated[editingEquipmentId];
               return updated;
@@ -654,7 +670,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
               });
             }
           } catch (error) {
-            console.error('Error parsing nextMilestoneDate in useEffect:', error);
+            devError('Error parsing nextMilestoneDate in useEffect:', error);
           }
         }
 
@@ -681,7 +697,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
       try {
         await fastAPI.importExistingDocuments();
       } catch (error) {
-        console.error('❌ Error importing existing documents:', error);
+        devError('❌ Error importing existing documents:', error);
       }
 
       const documentsMap: Record<string, any[]> = {};
@@ -694,14 +710,14 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
             : await fastAPI.getDocumentsByEquipment(eq.id);
           documentsMap[eq.id] = Array.isArray(docs) ? docs : [];
         } catch (error) {
-          console.error(`❌ Error loading documents for equipment ${eq.id}:`, error);
+          devError(`❌ Error loading documents for equipment ${eq.id}:`, error);
           documentsMap[eq.id] = [];
         }
       }
 
       setDocuments(documentsMap);
     } catch (error) {
-      console.error('❌ Error loading documents:', error);
+      devError('❌ Error loading documents:', error);
     }
   };
 
@@ -728,7 +744,7 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
       // OPTIMIZATION: Pre-fetch team members for all standalone equipment in background
       // This ensures team members are available immediately when viewing equipment cards
       if (projectId === 'standalone' && transformedEquipment.length > 0) {
-        console.log('🔄 Pre-fetching team members for all equipment in background...');
+        devLog('🔄 Pre-fetching team members for all equipment in background...');
         // Use Promise.allSettled to fetch all in parallel without blocking
         Promise.allSettled(
           transformedEquipment.map(async (eq: Equipment) => {
@@ -759,15 +775,15 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                     ...prev,
                     [eq.id]: transformedMembers
                   }));
-                  console.log('✅ Pre-fetched team members for equipment:', eq.id, 'count:', transformedMembers.length);
+                  devLog('✅ Pre-fetched team members for equipment:', eq.id, 'count:', transformedMembers.length);
                 }
               } catch (error) {
-                console.error('❌ Error pre-fetching team members for equipment', eq.id, '(non-fatal):', error);
+                devError('❌ Error pre-fetching team members for equipment', eq.id, '(non-fatal):', error);
               }
             }
           })
         ).then(() => {
-          console.log('✅ Finished pre-fetching team members for all equipment');
+          devLog('✅ Finished pre-fetching team members for all equipment');
         });
       }
 
@@ -810,52 +826,6 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
         }
       };
       debugDocuments();
-
-      // OPTIMIZATION: Pre-fetch team members for all standalone equipment in background
-      // This ensures team members are available immediately when viewing equipment cards
-      if (projectId === 'standalone' && transformedEquipment.length > 0) {
-        console.log('🔄 Pre-fetching team members for all equipment in background...');
-        // Use Promise.allSettled to fetch all in parallel without blocking
-        Promise.allSettled(
-          transformedEquipment.map(async (eq: Equipment) => {
-            // Only fetch if not already cached
-            if (!allEquipmentTeamMembers[eq.id] || allEquipmentTeamMembers[eq.id].length === 0) {
-              try {
-                const { DatabaseService } = await import('@/lib/database');
-                const teamData = await DatabaseService.getStandaloneTeamPositions(eq.id);
-                
-                if (teamData && teamData.length > 0) {
-                  const transformedMembers = (teamData as any[]).map((member, index) => ({
-                    id: member.id || `member-${index}`,
-                    name: member.person_name || 'Unknown',
-                    email: member.email || '',
-                    phone: member.phone || '',
-                    position: member.position_name || '',
-                    role: member.role || 'viewer',
-                    permissions: getPermissionsByRole(member.role || 'viewer'),
-                    status: 'active',
-                    avatar: (member.person_name || 'U').split(' ').map((n: string) => n[0]).join('').toUpperCase(),
-                    lastActive: 'Unknown',
-                    equipmentAssignments: [eq.id],
-                    dataAccess: getDataAccessByRole(member.role || 'viewer'),
-                    accessLevel: member.role || 'viewer'
-                  }));
-                  
-                  setAllEquipmentTeamMembers(prev => ({
-                    ...prev,
-                    [eq.id]: transformedMembers
-                  }));
-                  console.log('✅ Pre-fetched team members for equipment:', eq.id, 'count:', transformedMembers.length);
-                }
-              } catch (error) {
-                console.error('❌ Error pre-fetching team members for equipment', eq.id, '(non-fatal):', error);
-              }
-            }
-          })
-        ).then(() => {
-          console.log('✅ Finished pre-fetching team members for all equipment');
-        });
-      }
 
       // Load documents for all equipment
       loadDocumentsForEquipment(transformedEquipment);
@@ -1209,43 +1179,66 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
   };
 
   // Function to refresh equipment data from database (memoized with useCallback)
-  const refreshEquipmentData = useCallback(async () => {
-    try {
-      console.log('🔄 refreshEquipmentData: Starting refresh for project:', projectId);
-      // Check if this is standalone equipment
-      const freshEquipment = projectId === 'standalone' 
-        ? await fastAPI.getStandaloneEquipment() 
-        : await fastAPI.getEquipmentByProject(projectId);
-      console.log('🔄 refreshEquipmentData: Fresh equipment data received, type:', typeof freshEquipment, 'isArray:', Array.isArray(freshEquipment));
+  // PERFORMANCE: Added debouncing and request cancellation to prevent race conditions
+  const refreshEquipmentData = useCallback(async (immediate: boolean = false) => {
+    // Cancel any pending refresh
+    if (refreshTimeoutRef.current) {
+      clearTimeout(refreshTimeoutRef.current);
+      refreshTimeoutRef.current = null;
+    }
+    
+    // Cancel any in-flight request
+    if (refreshAbortControllerRef.current) {
+      refreshAbortControllerRef.current.abort();
+    }
 
-      // Debug progress images (commented for performance)
-      // freshEquipment.forEach((eq: any, index: number) => {
-      //   console.log(`🔍 Equipment ${index} (${eq.id}):`, {
-      //     progress_images: eq.progress_images,
-      //     progress_images_length: eq.progress_images?.length || 0
-      //   });
-      // });
+    const performRefresh = async () => {
+      // Create new abort controller for this request
+      const abortController = new AbortController();
+      refreshAbortControllerRef.current = abortController;
 
-      // Ensure freshEquipment is an array
-      const equipmentArray = Array.isArray(freshEquipment) ? freshEquipment : [];
-      console.log('🔄 refreshEquipmentData: Equipment array length:', equipmentArray.length);
-      const transformedEquipment = transformEquipmentDataCallback(equipmentArray);
-      console.log('🔄 refreshEquipmentData: Transformed equipment count:', transformedEquipment.length);
-      
-      // Post-process: For standalone equipment, ensure status is 'active' (not 'pending')
-      // This handles both new equipment (which should already be 'active') and old equipment
-      if (projectId === 'standalone') {
-        transformedEquipment.forEach((eq: Equipment) => {
-          if (eq.status === 'pending' || !eq.status) {
-            eq.status = 'active';
-          }
-        });
-      }
+      try {
+        devLog('🔄 refreshEquipmentData: Starting refresh for project:', projectId);
+        
+        // Check if this is standalone equipment
+        const freshEquipment = projectId === 'standalone' 
+          ? await fastAPI.getStandaloneEquipment() 
+          : await fastAPI.getEquipmentByProject(projectId);
+        
+        // Check if request was aborted
+        if (abortController.signal.aborted) {
+          devLog('⏹️ refreshEquipmentData: Request aborted');
+          return;
+        }
+        
+        devLog('🔄 refreshEquipmentData: Fresh equipment data received, type:', typeof freshEquipment, 'isArray:', Array.isArray(freshEquipment));
 
-      // Update the local equipment state - THIS IS CRITICAL FOR UI UPDATE
-      console.log('🔄 refreshEquipmentData: Updating localEquipment state with', transformedEquipment.length, 'items');
-      setLocalEquipment(transformedEquipment);
-      console.log('✅ refreshEquipmentData: localEquipment state updated');
+        // Ensure freshEquipment is an array
+        const equipmentArray = Array.isArray(freshEquipment) ? freshEquipment : [];
+        devLog('🔄 refreshEquipmentData: Equipment array length:', equipmentArray.length);
+        const transformedEquipment = transformEquipmentDataCallback(equipmentArray);
+        devLog('🔄 refreshEquipmentData: Transformed equipment count:', transformedEquipment.length);
+        
+        // Check again if request was aborted before updating state
+        if (abortController.signal.aborted) {
+          devLog('⏹️ refreshEquipmentData: Request aborted before state update');
+          return;
+        }
+        
+        // Post-process: For standalone equipment, ensure status is 'active' (not 'pending')
+        // This handles both new equipment (which should already be 'active') and old equipment
+        if (projectId === 'standalone') {
+          transformedEquipment.forEach((eq: Equipment) => {
+            if (eq.status === 'pending' || !eq.status) {
+              eq.status = 'active';
+            }
+          });
+        }
+
+        // Update the local equipment state - THIS IS CRITICAL FOR UI UPDATE
+        devLog('🔄 refreshEquipmentData: Updating localEquipment state with', transformedEquipment.length, 'items');
+        setLocalEquipment(transformedEquipment);
+        devLog('✅ refreshEquipmentData: localEquipment state updated');
 
       // Update custom fields state with fresh data
       const updatedCustomFields: Record<string, Array<{ name: string, value: string }>> = {};
@@ -1289,12 +1282,36 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
       // console.log('🔄 Updated Team Custom Fields:', updatedTeamCustomFields);
       setTeamCustomFields(updatedTeamCustomFields);
 
-      // console.log('✅ refreshEquipmentData: Completed successfully');
+      devLog('✅ refreshEquipmentData: Completed successfully');
+      
+      // Clear abort controller reference
+      if (refreshAbortControllerRef.current === abortController) {
+        refreshAbortControllerRef.current = null;
+      }
 
-    } catch (error) {
-      console.error('❌ Error refreshing equipment data:', error);
+    } catch (error: any) {
+      // Don't log aborted requests as errors
+      if (error?.name !== 'AbortError' && !abortController.signal.aborted) {
+        devError('❌ Error refreshing equipment data:', error);
+      }
+      // Clear abort controller reference on error
+      if (refreshAbortControllerRef.current === abortController) {
+        refreshAbortControllerRef.current = null;
+      }
     }
-  }, [projectId]); // Memoized with projectId dependency
+    };
+
+    // Debounce: Wait 300ms before refreshing (unless immediate is true)
+    // This prevents multiple rapid calls from causing race conditions
+    if (immediate) {
+      performRefresh();
+    } else {
+      refreshTimeoutRef.current = setTimeout(() => {
+        performRefresh();
+        refreshTimeoutRef.current = null;
+      }, 300);
+    }
+  }, [projectId, transformEquipmentDataCallback]); // Memoized with projectId dependency
   const [documents, setDocuments] = useState<Record<string, Array<{ id: string, file?: File, name: string, uploadedBy: string, uploadDate: string, document_url?: string, document_name?: string }>>>({});
   const [newDocumentName, setNewDocumentName] = useState('');
   const [documentPreview, setDocumentPreview] = useState<{ file: File, name: string } | null>(null);
@@ -1732,8 +1749,8 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
         onActivityUpdate();
       }
 
-      // Refresh equipment data from database
-      await refreshEquipmentData();
+      // Refresh equipment data from database (immediate for phase changes)
+      await refreshEquipmentData(true);
     } catch (error) {
       console.error('❌ Error updating equipment phase:', error);
       toast({
@@ -1906,8 +1923,8 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
         setNewProgressImage(null);
         setImageDescription('');
 
-        // Refresh equipment data to show the new progress image
-        await refreshEquipmentData();
+        // Refresh equipment data to show the new progress image (immediate for image uploads)
+        await refreshEquipmentData(true);
       }
       // console.log('💾 Saving equipment updates:', editFormData);
       // console.log('💾 editFormData.customFields:', editFormData.customFields);
@@ -2006,6 +2023,52 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
         }
       });
 
+      // CRITICAL FIX: Before saving, fetch current equipment data to ensure we don't overwrite technical sections
+      // This prevents data loss when technical sections were added from a different device/session
+      let currentEquipmentData: any = null;
+      try {
+        if (projectId === 'standalone') {
+          const currentResponse = await fastAPI.getStandaloneEquipment();
+          currentEquipmentData = currentResponse.find((eq: any) => eq.id === editingEquipmentId);
+        } else {
+          const currentResponse = await fastAPI.getEquipmentByProject(projectId);
+          currentEquipmentData = currentResponse.find((eq: any) => eq.id === editingEquipmentId);
+        }
+      } catch (error) {
+        devError('⚠️ Error fetching current equipment data before save (non-fatal):', error);
+      }
+      
+      // Merge technical sections: Keep existing sections from database, add/update from local state
+      if (currentEquipmentData && currentEquipmentData.technical_sections) {
+        const existingSections = Array.isArray(currentEquipmentData.technical_sections) 
+          ? currentEquipmentData.technical_sections 
+          : [];
+        const localSections = technicalSections[editingEquipmentId] || [];
+        
+        // Create a map of existing sections by name for quick lookup
+        const existingSectionsMap = new Map(
+          existingSections.map((section: any) => [section.name, section])
+        );
+        
+        // Update or add sections from local state
+        localSections.forEach((localSection: any) => {
+          existingSectionsMap.set(localSection.name, localSection);
+        });
+        
+        // Convert map back to array
+        equipmentData.technical_sections = Array.from(existingSectionsMap.values());
+        
+        devLog('🔧 Merged technical sections:', {
+          existing: existingSections.length,
+          local: localSections.length,
+          merged: equipmentData.technical_sections.length
+        });
+      } else {
+        // If we couldn't fetch current data, use local state (fallback)
+        equipmentData.technical_sections = technicalSections[editingEquipmentId] || [];
+        devWarn('⚠️ Using local technical sections only (could not fetch current data)');
+      }
+      
       // Call backend API to update equipment
       // console.log('🔧 Sending equipment data to API:', equipmentData);
       // console.log('🔧 Custom fields in data:', equipmentData.custom_fields);
@@ -2022,8 +2085,8 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
         onActivityUpdate();
       }
       
-      // Refresh equipment data from database to ensure consistency
-      await refreshEquipmentData();
+      // Refresh equipment data from database to ensure consistency (immediate for save operations)
+      await refreshEquipmentData(true);
 
       // Preserve the saved date in overviewLastUpdateRaw so it displays correctly
       // The date was saved as last_update, so we keep it in state for display

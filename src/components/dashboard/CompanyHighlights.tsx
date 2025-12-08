@@ -143,22 +143,37 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
       return []; // No assigned projects, return empty
     }
     return data.filter((item: any) => {
-      const itemProjectId = item[projectIdKey] || item.equipment?.[projectIdKey] || item.vdcr_records?.[projectIdKey];
+      // Handle nested paths like 'equipment.project_id' or 'vdcr_records.project_id'
+      let itemProjectId: string | undefined;
+      
+      if (projectIdKey.includes('.')) {
+        // Nested path - split and traverse
+        const parts = projectIdKey.split('.');
+        let current: any = item;
+        for (const part of parts) {
+          current = current?.[part];
+          if (current === undefined || current === null) break;
+        }
+        itemProjectId = current;
+      } else {
+        // Direct path
+        itemProjectId = item[projectIdKey] || item.equipment?.[projectIdKey] || item.vdcr_records?.[projectIdKey];
+      }
+      
+      // If project ID is found, check if it's in assigned projects
       return itemProjectId && assignedProjectIds.includes(itemProjectId);
     });
   };
 
   // Calculate date range based on time period
-  const getDateRange = useMemo(() => {
+  // FIX: Return primitive values (strings) instead of object to prevent infinite re-renders
+  const dateRangeStart = useMemo(() => {
     const now = new Date();
     const startDate = new Date();
 
     if (timePeriod === 'Custom') {
       if (customDateRange.from && customDateRange.to) {
-        return {
-          start: new Date(customDateRange.from).toISOString(),
-          end: new Date(customDateRange.to + 'T23:59:59').toISOString()
-        };
+        return new Date(customDateRange.from).toISOString();
       }
       // Default to 1 month if custom dates not set
       startDate.setMonth(now.getMonth() - 1);
@@ -178,56 +193,92 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
       }
     }
 
-    return {
-      start: startDate.toISOString(),
-      end: now.toISOString()
-    };
-  }, [timePeriod, customDateRange]);
+    return startDate.toISOString();
+  }, [timePeriod, customDateRange.from, customDateRange.to]);
+
+  const dateRangeEnd = useMemo(() => {
+    return new Date().toISOString();
+  }, []); // Only recalculate when component mounts, not on every render
 
   // Fetch production updates (progress images for Key Progress, progress entries for All Updates)
+  // FIX: Added request cancellation and fixed state clearing
   useEffect(() => {
-    // Clear production updates immediately when switching subtabs to prevent showing wrong data
-    setProductionUpdates([]);
+    // Create abort controller for request cancellation
+    const abortController = new AbortController();
+    let isMounted = true;
+    
+    // Set loading immediately when effect runs (before async function)
+    if (isExpanded && activeTab === 'production' && canSeeTab('production')) {
+      setLoading(true);
+    }
     
     const fetchProductionUpdates = async () => {
-      setLoading(true);
+      
       try {
         if (productionSubTab === 'key-progress') {
           // Fetch progress images for Key Progress tab
           const images = await fastAPI.getAllProgressImages(
-            getDateRange.start, 
-            getDateRange.end,
+            dateRangeStart, 
+            dateRangeEnd,
             userRole === 'firm_admin' ? undefined : assignedProjectIds
           );
-          const filteredImages = filterByAssignedProjects(images, 'equipment.project_id');
-          setProductionUpdates(Array.isArray(filteredImages) ? filteredImages : []);
+          
+          // Only update state if component is still mounted and request wasn't aborted
+          if (isMounted && !abortController.signal.aborted) {
+            const filteredImages = filterByAssignedProjects(images, 'equipment.project_id');
+            setProductionUpdates(Array.isArray(filteredImages) ? filteredImages : []);
+            setLoading(false); // Only set loading to false after data is set
+          }
         } else {
           // Fetch progress entries for All Updates tab
           const entries = await fastAPI.getAllProgressEntries(
-            getDateRange.start, 
-            getDateRange.end,
+            dateRangeStart, 
+            dateRangeEnd,
             userRole === 'firm_admin' ? undefined : assignedProjectIds
           );
-          const filteredEntries = filterByAssignedProjects(entries, 'equipment.project_id');
-          setProductionUpdates(Array.isArray(filteredEntries) ? filteredEntries : []);
+          
+          // Only update state if component is still mounted and request wasn't aborted
+          if (isMounted && !abortController.signal.aborted) {
+            const filteredEntries = filterByAssignedProjects(entries, 'equipment.project_id');
+            setProductionUpdates(Array.isArray(filteredEntries) ? filteredEntries : []);
+            setLoading(false); // Only set loading to false after data is set
+          }
         }
-      } catch (error) {
-        console.error('Error fetching production updates:', error);
-        setProductionUpdates([]);
-      } finally {
-        setLoading(false);
+      } catch (error: any) {
+        // Don't log aborted requests as errors
+        if (error?.name !== 'AbortError' && isMounted && !abortController.signal.aborted) {
+          console.error('Error fetching production updates:', error);
+          setProductionUpdates([]);
+        }
+        // Always set loading to false on error or abort
+        if (isMounted && !abortController.signal.aborted) {
+          setLoading(false);
+        }
       }
     };
 
     if (isExpanded && activeTab === 'production' && canSeeTab('production')) {
       fetchProductionUpdates();
+    } else {
+      // Clear data only when tab is not active
+      setProductionUpdates([]);
+      setLoading(false);
     }
-  }, [getDateRange, isExpanded, activeTab, productionSubTab, userRole, assignedProjectIds]);
+
+    // Cleanup: Cancel request if component unmounts or dependencies change
+    return () => {
+      isMounted = false;
+      abortController.abort();
+    };
+  }, [dateRangeStart, dateRangeEnd, isExpanded, activeTab, productionSubTab, userRole, assignedProjectIds]);
 
   // Fetch equipment card updates (equipment_updated activity logs)
+  // NOTE: This runs separately for "All Updates" tab but doesn't affect the main loading state
+  // to avoid conflicts with production updates loading
   useEffect(() => {
     const fetchEquipmentCardUpdates = async () => {
-      setLoading(true);
+      // Don't set main loading state here to avoid conflicts
+      // Equipment card updates are fetched separately and merged if needed
       try {
         const projectIds = userRole === 'firm_admin' ? undefined : assignedProjectIds;
         
@@ -248,8 +299,8 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
             try {
               const logs = await activityApi.getEquipmentActivityLogs(projectId, {
                 activityType: 'equipment_updated',
-                dateFrom: getDateRange.start,
-                dateTo: getDateRange.end
+                dateFrom: dateRangeStart,
+                dateTo: dateRangeEnd
               });
               if (Array.isArray(logs)) {
                 allUpdates.push(...logs);
@@ -272,7 +323,7 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
               },
               timeout: 30000
             });
-            let url = `/equipment_activity_logs?activity_type=eq.equipment_updated&created_at=gte.${getDateRange.start}&created_at=lte.${getDateRange.end}&select=*,equipment:equipment_id(id,tag_number,type,name,project_id,projects:project_id(id,name)),created_by_user:created_by(full_name,email)&order=created_at.desc`;
+            let url = `/equipment_activity_logs?activity_type=eq.equipment_updated&created_at=gte.${dateRangeStart}&created_at=lte.${dateRangeEnd}&select=*,equipment:equipment_id(id,tag_number,type,name,project_id,projects:project_id(id,name)),created_by_user:created_by(full_name,email)&order=created_at.desc`;
             const response = await apiClient.get(url);
             const logs = Array.isArray(response.data) ? response.data : [];
             allUpdates.push(...logs);
@@ -306,15 +357,14 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
       } catch (error) {
         console.error('Error fetching equipment card updates:', error);
         setEquipmentCardUpdates([]);
-      } finally {
-        setLoading(false);
       }
+      // Don't set loading to false here - let production updates control the loading state
     };
 
     if (isExpanded && activeTab === 'production' && canSeeTab('production') && productionSubTab === 'all-updates') {
       fetchEquipmentCardUpdates();
     }
-  }, [getDateRange, isExpanded, activeTab, productionSubTab, userRole, assignedProjectIds]);
+  }, [dateRangeStart, dateRangeEnd, isExpanded, activeTab, productionSubTab, userRole, assignedProjectIds]);
 
   // Audio playback function
   const playAudio = (audioData: string, entryId: string) => {
@@ -494,8 +544,8 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
       try {
         // Fetch VDCR records with status changes filtered by updated_at in the selected time range
         const documents = await fastAPI.getAllVDCRDocuments(
-          getDateRange.start, 
-          getDateRange.end,
+          dateRangeStart, 
+          dateRangeEnd,
           userRole === 'firm_admin' ? undefined : assignedProjectIds
         );
         // The API now filters by updated_at, so we just need to ensure we have valid records
@@ -518,7 +568,7 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
     if (isExpanded && activeTab === 'documentation' && canSeeTab('documentation')) {
       fetchDocumentationUpdates();
     }
-  }, [getDateRange, activeTab, isExpanded, userRole, assignedProjectIds]);
+  }, [dateRangeStart, dateRangeEnd, activeTab, isExpanded, userRole, assignedProjectIds]);
 
   // Fetch timeline updates - ALL equipment ordered by days remaining (not filtered by time period)
   // Uses po_cdd (PO-CDD) field instead of completion_date
@@ -624,8 +674,8 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
         try {
           // Refresh progress entries
           const entries = await fastAPI.getAllProgressEntries(
-            getDateRange.start, 
-            getDateRange.end,
+            dateRangeStart, 
+            dateRangeEnd,
             userRole === 'firm_admin' ? undefined : assignedProjectIds
           );
           const filteredEntries = filterByAssignedProjects(entries, 'equipment.project_id');
@@ -641,8 +691,8 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
                 try {
                   const logs = await activityApi.getEquipmentActivityLogs(projectId, {
                     activityType: 'equipment_updated',
-                    dateFrom: getDateRange.start,
-                    dateTo: getDateRange.end
+                    dateFrom: dateRangeStart,
+                    dateTo: dateRangeEnd
                   });
                   if (Array.isArray(logs)) {
                     allUpdates.push(...logs);
@@ -664,7 +714,7 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
                   },
                   timeout: 30000
                 });
-                let url = `/equipment_activity_logs?activity_type=eq.equipment_updated&created_at=gte.${getDateRange.start}&created_at=lte.${getDateRange.end}&select=*,equipment:equipment_id(id,tag_number,type,name,project_id,projects:project_id(id,name)),created_by_user:created_by(full_name,email)&order=created_at.desc`;
+                let url = `/equipment_activity_logs?activity_type=eq.equipment_updated&created_at=gte.${dateRangeStart}&created_at=lte.${dateRangeEnd}&select=*,equipment:equipment_id(id,tag_number,type,name,project_id,projects:project_id(id,name)),created_by_user:created_by(full_name,email)&order=created_at.desc`;
                 const response = await apiClient.get(url);
                 const logs = Array.isArray(response.data) ? response.data : [];
                 allUpdates.push(...logs);
@@ -701,8 +751,8 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
       } else if (activeTab === 'documentation' && canSeeTab('documentation')) {
         try {
           const documents = await fastAPI.getAllVDCRDocuments(
-            getDateRange.start, 
-            getDateRange.end,
+            dateRangeStart, 
+            dateRangeEnd,
             userRole === 'firm_admin' ? undefined : assignedProjectIds
           );
           const docsArray = Array.isArray(documents) ? documents : [];
@@ -771,7 +821,7 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
 
     const interval = setInterval(refreshData, 30000); // Refresh every 30 seconds
     return () => clearInterval(interval);
-  }, [isExpanded, activeTab, productionSubTab, getDateRange, userRole, assignedProjectIds]);
+  }, [isExpanded, activeTab, productionSubTab, dateRangeStart, dateRangeEnd, userRole, assignedProjectIds]);
 
   const formatTimeAgo = (dateString: string) => {
     try {
@@ -971,8 +1021,15 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
           <div className="p-2.5 sm:p-4 md:p-6">
             {loading ? (
               <div className="text-center py-6 sm:py-8 md:py-10">
-                <div className="inline-block animate-spin rounded-full h-6 w-6 sm:h-8 sm:w-8 md:h-10 md:w-10 border-b-2 border-blue-600"></div>
-                <p className="mt-2 text-xs sm:text-sm md:text-base text-gray-500">Loading updates...</p>
+                <div className="flex flex-col items-center justify-center">
+                  <div className="inline-block animate-spin rounded-full h-6 w-6 sm:h-8 sm:w-8 md:h-10 md:w-10 border-b-2 border-blue-600 mb-3 sm:mb-4"></div>
+                  <p className="text-xs sm:text-sm md:text-base text-gray-600 font-medium">
+                    Collecting all updates from across projects & from all key team members...
+                  </p>
+                  <p className="text-[10px] xs:text-xs sm:text-sm text-gray-400 mt-1">
+                    This may take a few moments
+                  </p>
+                </div>
               </div>
             ) : (
               <>
@@ -1025,7 +1082,19 @@ const CompanyHighlights = ({ onSelectProject }: CompanyHighlightsProps) => {
                       </div>
                     </div>
 
-                    {filteredProductionUpdates.length === 0 ? (
+                    {loading ? (
+                      <div className="text-center py-6 sm:py-8 md:py-10">
+                        <div className="flex flex-col items-center justify-center">
+                          <div className="animate-spin rounded-full h-8 w-8 sm:h-10 sm:w-10 border-b-2 border-blue-600 mb-3 sm:mb-4"></div>
+                          <p className="text-xs sm:text-sm md:text-base text-gray-600 font-medium">
+                            Collecting all updates from across projects & from all key team members...
+                          </p>
+                          <p className="text-[10px] xs:text-xs sm:text-sm text-gray-400 mt-1">
+                            This may take a few moments
+                          </p>
+                        </div>
+                      </div>
+                    ) : filteredProductionUpdates.length === 0 ? (
                       <div className="text-center py-6 sm:py-8 md:py-10 text-gray-500">
                         <p className="text-xs sm:text-sm md:text-base">
                           {productionSearchQuery.trim() 

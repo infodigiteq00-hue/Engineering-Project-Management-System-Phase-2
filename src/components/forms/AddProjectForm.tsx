@@ -3044,21 +3044,19 @@ Industry: Petrochemical`;
       }
     }
     
-    // Store the created project and show success screen
-      setCreatedProject(projectDataForParent);
+    setCreatedProject(projectDataForParent);
+    
+    // Reset submitting state before showing success screen
+    setIsSubmitting(false);
     setShowSuccessScreen(true);
     
-      // Call parent onSubmit with the created project data
-      onSubmit(projectDataForParent);
-      
-    } catch (error: any) {
-       // console.error('❌ Error creating project:', error);
-       // console.error('❌ Error details:', {
-       //   message: error.message,
-       //   response: error.response?.data,
-       //   status: error.response?.status,
-       //   statusText: error.response?.statusText
-       // });
+      // Call parent onSubmit with the created project data (don't await to avoid blocking)
+      try {
+        onSubmit(projectDataForParent);
+      } catch (onSubmitError) {
+        console.error('❌ Error in onSubmit callback (non-blocking):', onSubmitError);
+        // Don't throw - we've already succeeded in creating the project
+      }
       toast({ title: 'Error', description: `Failed to create project: ${error.message || 'Unknown error'}`, variant: 'destructive' });
     } finally {
       setIsSubmitting(false);

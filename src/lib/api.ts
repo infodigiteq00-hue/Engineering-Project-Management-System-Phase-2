@@ -23,7 +23,7 @@ export const fastAPI = {
   async getCompanies() {
     try {
       const response = await api.get('/firms?select=*&order=created_at.desc');
-      return response.data;
+      return Array.isArray(response.data) ? response.data : [];
     } catch (error) {
       console.error('❌ Error fetching companies:', error);
       throw error;
@@ -34,7 +34,7 @@ export const fastAPI = {
   async getFirmById(firmId: string) {
     try {
       const response = await api.get(`/firms?id=eq.${firmId}&select=*`);
-      if (response.data && response.data.length > 0) {
+      if (response.data && Array.isArray(response.data) && response.data.length > 0) {
         return response.data[0];
       }
       return null;
@@ -535,10 +535,22 @@ export const fastAPI = {
   // =====================================================
 
   // Fetch equipment by project_id with progress images
+  // PERFORMANCE: Added timeout handling and batch processing to prevent statement timeouts
   async getEquipmentByProject(projectId: string) {
     try {
-      // Fetch all equipment first
-      const response = await api.get(`/equipment?project_id=eq.${projectId}&select=*&order=created_at.desc`);
+      // Fetch all equipment first with timeout handling
+      let response;
+      try {
+        response = await api.get(`/equipment?project_id=eq.${projectId}&select=*&order=created_at.desc`, { timeout: 20000 });
+      } catch (error: any) {
+        // Handle timeout or 500 errors
+        if (error?.code === 'ECONNABORTED' || error?.response?.data?.code === '57014' || error?.response?.status === 500) {
+          console.error('❌ Error fetching equipment: Query timeout', error);
+          return []; // Return empty array instead of crashing
+        }
+        throw error;
+      }
+      
       const equipment = response.data;
       
       if (!equipment || !Array.isArray(equipment) || equipment.length === 0) {
@@ -548,17 +560,38 @@ export const fastAPI = {
       // Get all equipment IDs for batch fetching
       const equipmentIds = (equipment as any[]).map(eq => eq.id);
       
-      // OPTIMIZATION: Batch fetch ALL progress images and entries in 2 API calls instead of N*2 calls
-      // This reduces from 2N API calls to just 2 API calls
-      const [progressImagesResponse, progressEntriesResponse] = await Promise.all([
-        // Fetch ALL progress images for all equipment in one call
-        api.get(`/equipment_progress_images?equipment_id=in.(${equipmentIds.join(',')})&select=*&order=created_at.desc`).catch(() => ({ data: [] })),
-        // Fetch ALL progress entries for all equipment in one call
-        api.get(`/equipment_progress_entries?equipment_id=in.(${equipmentIds.join(',')})&select=*&order=created_at.desc`).catch(() => ({ data: [] }))
-      ]);
-
-      const allProgressImages = progressImagesResponse.data || [];
-      const allProgressEntries = progressEntriesResponse.data || [];
+      // PERFORMANCE: Fetch progress images and entries in smaller batches to prevent timeouts
+      // Split into batches of 50 equipment IDs max
+      const batchSize = 50;
+      const allProgressImages: any[] = [];
+      const allProgressEntries: any[] = [];
+      
+      for (let i = 0; i < equipmentIds.length; i += batchSize) {
+        const batch = equipmentIds.slice(i, i + batchSize);
+        
+        try {
+          const [progressImagesResponse, progressEntriesResponse] = await Promise.all([
+            // Fetch progress images for this batch
+            api.get(`/equipment_progress_images?equipment_id=in.(${batch.join(',')})&select=id,equipment_id,image_url,description,uploaded_by,upload_date,created_at,audio_data,audio_duration&order=created_at.desc&limit=1000`, 
+              { timeout: 15000 }
+            ).catch(() => ({ data: [] })),
+            // Fetch progress entries for this batch
+            api.get(`/equipment_progress_entries?equipment_id=in.(${batch.join(',')})&select=*&order=created_at.desc&limit=1000`, 
+              { timeout: 15000 }
+            ).catch(() => ({ data: [] }))
+          ]);
+          
+          allProgressImages.push(...(progressImagesResponse.data || []));
+          allProgressEntries.push(...(progressEntriesResponse.data || []));
+        } catch (error: any) {
+          // Log but continue with other batches
+          if (error?.code === 'ECONNABORTED' || error?.response?.data?.code === '57014') {
+            console.warn(`⚠️ Timeout fetching progress data for batch ${i / batchSize + 1} (non-fatal):`, error);
+          } else {
+            console.warn(`⚠️ Error fetching progress data for batch ${i / batchSize + 1} (non-fatal):`, error);
+          }
+        }
+      }
 
       // Map progress data to equipment
       const equipmentWithProgressData = (equipment as any[]).map((eq: any) => {
@@ -582,9 +615,14 @@ export const fastAPI = {
       });
       
       return equipmentWithProgressData;
-    } catch (error) {
+    } catch (error: any) {
+      // Better error handling - don't throw, return empty array to prevent UI crashes
+      if (error?.code === 'ECONNABORTED' || error?.response?.data?.code === '57014' || error?.response?.status === 500) {
+        console.error('❌ Error fetching equipment: Query timeout or server error', error);
+        return []; // Return empty array instead of crashing
+      }
       console.error('❌ Error fetching equipment:', error);
-      throw error;
+      return []; // Return empty array on any error to prevent UI crashes
     }
   },
 
@@ -615,17 +653,44 @@ export const fastAPI = {
       // Get all equipment IDs for batch fetching
       const equipmentIds = (equipment as any[]).map(eq => eq.id);
       
-      // OPTIMIZATION: Batch fetch ALL progress images and entries in 2 API calls instead of N*2 calls
-      // This reduces from 2N API calls to just 2 API calls
-      const [progressImagesResponse, progressEntriesResponse] = await Promise.all([
-        // Fetch ALL progress images for all equipment in one call
-        api.get(`/standalone_equipment_progress_images?equipment_id=in.(${equipmentIds.join(',')})&select=*&order=created_at.desc`).catch(() => ({ data: [] })),
-        // Fetch ALL progress entries for all equipment in one call
-        api.get(`/standalone_equipment_progress_entries?equipment_id=in.(${equipmentIds.join(',')})&select=*&order=created_at.desc`).catch(() => ({ data: [] }))
-      ]);
+      // PERFORMANCE: Batch fetch progress images and entries in smaller batches to prevent timeouts
+      // Split into batches of 50 equipment IDs max
+      const batchSize = 50;
+      const standaloneProgressImages: any[] = [];
+      const standaloneProgressEntries: any[] = [];
+      
+      for (let i = 0; i < equipmentIds.length; i += batchSize) {
+        const batch = equipmentIds.slice(i, i + batchSize);
+        
+        try {
+          const [progressImagesResponse, progressEntriesResponse] = await Promise.all([
+            // Fetch progress images for this batch
+            api.get(`/standalone_equipment_progress_images?equipment_id=in.(${batch.join(',')})&select=id,equipment_id,image_url,description,uploaded_by,upload_date,created_at,audio_data,audio_duration&order=created_at.desc&limit=1000`, 
+              { timeout: 15000 }
+            ).catch(() => ({ data: [] })),
+            // Fetch progress entries for this batch
+            api.get(`/standalone_equipment_progress_entries?equipment_id=in.(${batch.join(',')})&select=*&order=created_at.desc&limit=1000`, 
+              { timeout: 15000 }
+            ).catch(() => ({ data: [] }))
+          ]);
+          
+          standaloneProgressImages.push(...(progressImagesResponse.data || []));
+          standaloneProgressEntries.push(...(progressEntriesResponse.data || []));
+        } catch (error: any) {
+          // Log but continue with other batches
+          if (error?.code === 'ECONNABORTED' || error?.response?.data?.code === '57014') {
+            console.warn(`⚠️ Timeout fetching standalone progress data for batch ${i / batchSize + 1} (non-fatal):`, error);
+          } else {
+            console.warn(`⚠️ Error fetching standalone progress data for batch ${i / batchSize + 1} (non-fatal):`, error);
+          }
+        }
+      }
+      
+      const progressImagesResponse = { data: standaloneProgressImages };
+      const progressEntriesResponse = { data: standaloneProgressEntries };
 
-      const allProgressImages = progressImagesResponse.data || [];
-      const allProgressEntries = progressEntriesResponse.data || [];
+      const allProgressImages = standaloneProgressImages;
+      const allProgressEntries = standaloneProgressEntries;
 
       // Map progress data to equipment
       const equipmentWithProgressData = (equipment as any[]).map((eq: any) => {
@@ -1797,21 +1862,109 @@ export const fastAPI = {
   },
 
   // Get all progress entries across all projects (for company highlights)
+  // PERFORMANCE: Simplified query to prevent statement timeouts (same fix as getAllProgressImages)
   async getAllProgressEntries(startDate?: string, endDate?: string, projectIds?: string[]) {
     try {
-      // Fetch progress entries with equipment and projects
-      // Note: Fetching user data separately due to PostgREST FK relationship issue
-      let url = `/equipment_progress_entries?select=*,equipment:equipment_id(id,tag_number,type,name,project_id,projects:project_id(id,name))&order=created_at.desc`;
+      // CRITICAL FIX: Simplified query - removed complex nested joins that cause timeouts
+      // Fetch only essential fields first, then fetch related data separately
+      let url = `/equipment_progress_entries?select=id,equipment_id,entry_text,entry_type,created_at,created_by,audio_data,audio_duration,image_url,image_description&order=created_at.desc&limit=500`;
       if (startDate) {
         url += `&created_at=gte.${startDate}`;
       }
       if (endDate) {
         url += `&created_at=lte.${endDate}`;
       }
-      // Note: PostgREST doesn't support filtering nested relationships directly
-      // Project filtering is handled client-side after fetching
-      const response = await api.get(url);
-      const entries = Array.isArray(response.data) ? response.data : [];
+      
+      // PERFORMANCE: Add timeout handling and retry logic (same as getAllProgressImages)
+      let response;
+      let retries = 0;
+      const maxRetries = 2;
+      
+      while (retries <= maxRetries) {
+        try {
+          response = await api.get(url, { timeout: 20000 }); // 20 second timeout
+          break; // Success, exit retry loop
+        } catch (error: any) {
+          // Check if it's a timeout error
+          if (error?.code === 'ECONNABORTED' || error?.response?.data?.code === '57014' || error?.response?.status === 500) {
+            retries++;
+            if (retries > maxRetries) {
+              console.error('❌ Error fetching all progress entries: Query timeout after retries', error);
+              return []; // Return empty array instead of crashing
+            }
+            // Wait before retry (exponential backoff)
+            await new Promise(resolve => setTimeout(resolve, 1000 * retries));
+            continue;
+          }
+          throw error; // Re-throw if not a timeout
+        }
+      }
+      
+      const entries = Array.isArray(response?.data) ? response.data : [];
+      
+      // PERFORMANCE: Fetch equipment data separately in batches to avoid timeouts
+      if (entries.length > 0) {
+        const equipmentIds = [...new Set(entries.map((entry: any) => entry.equipment_id).filter(Boolean))];
+        
+        // Fetch equipment data in smaller batches
+        const equipmentMap: Record<string, any> = {};
+        const batchSize = 50;
+        
+        for (let i = 0; i < equipmentIds.length; i += batchSize) {
+          const batch = equipmentIds.slice(i, i + batchSize);
+          try {
+            const equipmentResponse = await api.get(
+              `/equipment?id=in.(${batch.join(',')})&select=id,tag_number,type,name,project_id&limit=${batchSize}`,
+              { timeout: 15000 }
+            ).catch(() => ({ data: [] }));
+            
+            (equipmentResponse.data || []).forEach((eq: any) => {
+              equipmentMap[eq.id] = eq;
+            });
+          } catch (error) {
+            console.warn('⚠️ Error fetching equipment batch (non-fatal):', error);
+          }
+        }
+        
+        // Fetch project data separately if needed
+        const projectIds = [...new Set(Object.values(equipmentMap).map((eq: any) => eq.project_id).filter(Boolean))];
+        const projectMap: Record<string, any> = {};
+        
+        if (projectIds.length > 0) {
+          try {
+            const projectResponse = await api.get(
+              `/projects?id=in.(${projectIds.join(',')})&select=id,name&limit=100`,
+              { timeout: 10000 }
+            ).catch(() => ({ data: [] }));
+            
+            (projectResponse.data || []).forEach((proj: any) => {
+              projectMap[proj.id] = proj;
+            });
+          } catch (error) {
+            console.warn('⚠️ Error fetching projects (non-fatal):', error);
+          }
+        }
+        
+        // Attach equipment and project data to entries
+        entries.forEach((entry: any) => {
+          if (entry.equipment_id) {
+            const equipment = equipmentMap[entry.equipment_id];
+            entry.equipment = equipment ? {
+              ...equipment,
+              projects: equipment.project_id ? projectMap[equipment.project_id] : null
+            } : {
+              // Fallback: Create minimal equipment object if fetch failed
+              id: entry.equipment_id,
+              tag_number: 'Unknown',
+              type: 'Equipment',
+              project_id: null
+            };
+          } else {
+            // Entry has no equipment_id - set equipment to null
+            entry.equipment = null;
+          }
+        });
+      }
       
       // Fetch user data separately for entries that have created_by
       const userIds = [...new Set(entries.map((entry: any) => entry.created_by).filter(Boolean))];
@@ -1819,7 +1972,7 @@ export const fastAPI = {
       
       if (userIds.length > 0) {
         try {
-          const usersResponse = await api.get(`/users?id=in.(${userIds.join(',')})&select=id,full_name,email`);
+          const usersResponse = await api.get(`/users?id=in.(${userIds.join(',')})&select=id,full_name,email`, { timeout: 10000 });
           const users = Array.isArray(usersResponse.data) ? usersResponse.data : [];
           usersMap = users.reduce((acc: any, user: any) => {
             acc[user.id] = { full_name: user.full_name, email: user.email };
@@ -1830,32 +1983,114 @@ export const fastAPI = {
         }
       }
       
-      // Merge user data into entries
+      // Merge user data into entries and add entry_type for filtering
       return entries.map((entry: any) => ({
         ...entry,
-        created_by_user: entry.created_by ? usersMap[entry.created_by] || null : null
+        created_by_user: entry.created_by ? usersMap[entry.created_by] || null : null,
+        entry_type: entry.entry_type || 'progress_entry' // Ensure entry_type exists for filtering
       }));
     } catch (error: any) {
-      console.error('❌ Error fetching all progress entries:', error);
+      // Don't log aborted requests as errors
+      if (error?.name !== 'AbortError') {
+        console.error('❌ Error fetching all progress entries:', error);
+      }
       return [];
     }
   },
 
   // Get all progress images (for company highlights - Key Progress section)
+  // PERFORMANCE: Simplified query to prevent statement timeouts
   async getAllProgressImages(startDate?: string, endDate?: string, projectIds?: string[]) {
     try {
-      // Fetch progress images with equipment and projects
-      let url = `/equipment_progress_images?select=*,equipment:equipment_id(id,tag_number,type,name,project_id,projects:project_id(id,name))&order=created_at.desc`;
+      // CRITICAL FIX: Simplified query - removed complex nested joins that cause timeouts
+      // Fetch only essential fields first, then fetch related data separately if needed
+      let url = `/equipment_progress_images?select=id,equipment_id,image_url,description,uploaded_by,upload_date,created_at,audio_data,audio_duration&order=created_at.desc&limit=500`;
       if (startDate) {
         url += `&created_at=gte.${startDate}`;
       }
       if (endDate) {
         url += `&created_at=lte.${endDate}`;
       }
-      // Note: PostgREST doesn't support filtering nested relationships directly
-      // Project filtering is handled client-side after fetching
-      const response = await api.get(url);
-      const images = Array.isArray(response.data) ? response.data : [];
+      
+      // PERFORMANCE: Add timeout handling and retry logic
+      let response;
+      let retries = 0;
+      const maxRetries = 2;
+      
+      while (retries <= maxRetries) {
+        try {
+          response = await api.get(url, { timeout: 20000 }); // 20 second timeout
+          break; // Success, exit retry loop
+        } catch (error: any) {
+          // Check if it's a timeout error
+          if (error?.code === 'ECONNABORTED' || error?.response?.data?.code === '57014' || error?.response?.status === 500) {
+            retries++;
+            if (retries > maxRetries) {
+              console.error('❌ Error fetching progress images: Query timeout after retries', error);
+              return []; // Return empty array instead of crashing
+            }
+            // Wait before retry (exponential backoff)
+            await new Promise(resolve => setTimeout(resolve, 1000 * retries));
+            continue;
+          }
+          throw error; // Re-throw if not a timeout
+        }
+      }
+      
+      const images = Array.isArray(response?.data) ? response.data : [];
+      
+      // PERFORMANCE: Fetch equipment data separately in batches to avoid timeouts
+      if (images.length > 0) {
+        const equipmentIds = [...new Set(images.map((img: any) => img.equipment_id).filter(Boolean))];
+        
+        // Fetch equipment data in smaller batches
+        const equipmentMap: Record<string, any> = {};
+        const batchSize = 50;
+        
+        for (let i = 0; i < equipmentIds.length; i += batchSize) {
+          const batch = equipmentIds.slice(i, i + batchSize);
+          try {
+            const equipmentResponse = await api.get(
+              `/equipment?id=in.(${batch.join(',')})&select=id,tag_number,type,name,project_id&limit=${batchSize}`,
+              { timeout: 15000 }
+            ).catch(() => ({ data: [] }));
+            
+            (equipmentResponse.data || []).forEach((eq: any) => {
+              equipmentMap[eq.id] = eq;
+            });
+          } catch (error) {
+            console.warn('⚠️ Error fetching equipment batch (non-fatal):', error);
+          }
+        }
+        
+        // Fetch project data separately if needed
+        const projectIds = [...new Set(Object.values(equipmentMap).map((eq: any) => eq.project_id).filter(Boolean))];
+        const projectMap: Record<string, any> = {};
+        
+        if (projectIds.length > 0) {
+          try {
+            const projectResponse = await api.get(
+              `/projects?id=in.(${projectIds.join(',')})&select=id,name&limit=100`,
+              { timeout: 10000 }
+            ).catch(() => ({ data: [] }));
+            
+            (projectResponse.data || []).forEach((proj: any) => {
+              projectMap[proj.id] = proj;
+            });
+          } catch (error) {
+            console.warn('⚠️ Error fetching projects (non-fatal):', error);
+          }
+        }
+        
+        // Attach equipment and project data to images
+        images.forEach((img: any) => {
+          const equipment = equipmentMap[img.equipment_id];
+          img.equipment = equipment ? {
+            ...equipment,
+            projects: equipment.project_id ? projectMap[equipment.project_id] : null
+          } : null;
+        });
+      }
       
       // Fetch user data separately for images that have uploaded_by (if it's a UUID)
       // uploaded_by is a text field, so it might be a UUID or a name
@@ -1900,6 +2135,7 @@ export const fastAPI = {
           uploaded_by: uploadedBy,
           created_by: uploadedBy, // For compatibility
           created_by_user: userInfo || (uploadedBy && !isUuid ? { full_name: uploadedBy } : null),
+          entry_type: 'progress_image', // CRITICAL: Add entry_type for filtering in CompanyHighlights
           equipment: img.equipment || {
             id: img.equipment_id,
             tag_number: 'N/A',
