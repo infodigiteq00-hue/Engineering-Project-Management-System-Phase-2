@@ -654,34 +654,73 @@ export const fastAPI = {
       const equipmentIds = (equipment as any[]).map(eq => eq.id);
       
       // PERFORMANCE: Batch fetch progress images and entries in smaller batches to prevent timeouts
-      // Split into batches of 50 equipment IDs max
-      const batchSize = 50;
+      // CRITICAL FIX: Reduced batch size and added retry logic for timeout errors
+      const batchSize = 20; // Reduced from 50 to 20 to prevent timeouts
       const standaloneProgressImages: any[] = [];
       const standaloneProgressEntries: any[] = [];
       
       for (let i = 0; i < equipmentIds.length; i += batchSize) {
         const batch = equipmentIds.slice(i, i + batchSize);
         
-        try {
-          const [progressImagesResponse, progressEntriesResponse] = await Promise.all([
-            // Fetch progress images for this batch
-            api.get(`/standalone_equipment_progress_images?equipment_id=in.(${batch.join(',')})&select=id,equipment_id,image_url,description,uploaded_by,upload_date,created_at,audio_data,audio_duration&order=created_at.desc&limit=1000`, 
-              { timeout: 15000 }
-            ).catch(() => ({ data: [] })),
-            // Fetch progress entries for this batch
-            api.get(`/standalone_equipment_progress_entries?equipment_id=in.(${batch.join(',')})&select=*&order=created_at.desc&limit=1000`, 
-              { timeout: 15000 }
-            ).catch(() => ({ data: [] }))
-          ]);
-          
-          standaloneProgressImages.push(...(progressImagesResponse.data || []));
-          standaloneProgressEntries.push(...(progressEntriesResponse.data || []));
-        } catch (error: any) {
-          // Log but continue with other batches
-          if (error?.code === 'ECONNABORTED' || error?.response?.data?.code === '57014') {
-            console.warn(`⚠️ Timeout fetching standalone progress data for batch ${i / batchSize + 1} (non-fatal):`, error);
-          } else {
-            console.warn(`⚠️ Error fetching standalone progress data for batch ${i / batchSize + 1} (non-fatal):`, error);
+        // Retry logic for timeout errors
+        let retries = 0;
+        const maxRetries = 2;
+        let batchSuccess = false;
+        
+        while (retries <= maxRetries && !batchSuccess) {
+          try {
+            const [progressImagesResponse, progressEntriesResponse] = await Promise.all([
+              // Fetch progress images for this batch
+              api.get(`/standalone_equipment_progress_images?equipment_id=in.(${batch.join(',')})&select=id,equipment_id,image_url,description,uploaded_by,upload_date,created_at,audio_data,audio_duration&order=created_at.desc&limit=1000`, 
+                { timeout: 20000 } // Increased timeout to 20s
+              ),
+              // Fetch progress entries for this batch
+              api.get(`/standalone_equipment_progress_entries?equipment_id=in.(${batch.join(',')})&select=*&order=created_at.desc&limit=1000`, 
+                { timeout: 20000 } // Increased timeout to 20s
+              )
+            ]);
+            
+            standaloneProgressImages.push(...(Array.isArray(progressImagesResponse.data) ? progressImagesResponse.data : []));
+            standaloneProgressEntries.push(...(Array.isArray(progressEntriesResponse.data) ? progressEntriesResponse.data : []));
+            batchSuccess = true;
+          } catch (error: any) {
+            // Check if it's a timeout error
+            if (error?.code === 'ECONNABORTED' || error?.response?.data?.code === '57014') {
+              retries++;
+              if (retries > maxRetries) {
+                console.warn(`⚠️ Timeout fetching standalone progress data for batch ${i / batchSize + 1} after ${maxRetries} retries (non-fatal):`, error);
+                // Try fetching individually as fallback for this batch
+                try {
+                  for (const eqId of batch as string[]) {
+                    try {
+                      const [imgRes, entryRes] = await Promise.all([
+                        api.get(`/standalone_equipment_progress_images?equipment_id=eq.${eqId}&select=id,equipment_id,image_url,description,uploaded_by,upload_date,created_at,audio_data,audio_duration&order=created_at.desc&limit=1000`, 
+                          { timeout: 10000 }
+                        ).catch(() => ({ data: [] })),
+                        api.get(`/standalone_equipment_progress_entries?equipment_id=eq.${eqId}&select=*&order=created_at.desc&limit=1000`, 
+                          { timeout: 10000 }
+                        ).catch(() => ({ data: [] }))
+                      ]);
+                      standaloneProgressImages.push(...(imgRes.data || []));
+                      standaloneProgressEntries.push(...(entryRes.data || []));
+                    } catch (indError) {
+                      console.warn(`⚠️ Error fetching progress data for equipment ${eqId} individually:`, indError);
+                    }
+                  }
+                } catch (fallbackError) {
+                  console.warn(`⚠️ Fallback individual fetch also failed for batch ${i / batchSize + 1}:`, fallbackError);
+                }
+                break; // Exit retry loop
+              } else {
+                // Wait before retry (exponential backoff)
+                await new Promise(resolve => setTimeout(resolve, 1000 * retries));
+                continue; // Retry
+              }
+            } else {
+              // Non-timeout error, log and continue
+              console.warn(`⚠️ Error fetching standalone progress data for batch ${i / batchSize + 1} (non-fatal):`, error);
+              break; // Exit retry loop for non-timeout errors
+            }
           }
         }
       }
