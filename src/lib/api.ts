@@ -561,25 +561,28 @@ export const fastAPI = {
       const equipmentIds = (equipment as any[]).map(eq => eq.id);
       
       // PERFORMANCE: Fetch progress images and entries in smaller batches to prevent timeouts
-      // Split into batches of 50 equipment IDs max
-      const batchSize = 50;
+      // CRITICAL: Reduced batch size from 50 to 15 and limits from 1000 to 250 for faster queries
+      const batchSize = 15; // Reduced from 50 to prevent timeouts
       const allProgressImages: any[] = [];
       const allProgressEntries: any[] = [];
       
+      // Process batches sequentially to avoid overwhelming the database
       for (let i = 0; i < equipmentIds.length; i += batchSize) {
         const batch = equipmentIds.slice(i, i + batchSize);
         
         try {
-          const [progressImagesResponse, progressEntriesResponse] = await Promise.all([
-            // Fetch progress images for this batch
-            api.get(`/equipment_progress_images?equipment_id=in.(${batch.join(',')})&select=id,equipment_id,image_url,description,uploaded_by,upload_date,created_at,audio_data,audio_duration&order=created_at.desc&limit=1000`, 
-              { timeout: 15000 }
-            ).catch(() => ({ data: [] })),
-            // Fetch progress entries for this batch
-            api.get(`/equipment_progress_entries?equipment_id=in.(${batch.join(',')})&select=*&order=created_at.desc&limit=1000`, 
-              { timeout: 15000 }
-            ).catch(() => ({ data: [] }))
-          ]);
+          // PERFORMANCE: Process sequentially instead of Promise.all to reduce database load
+          // Fetch progress images first
+          const progressImagesResponse = await api.get(
+            `/equipment_progress_images?equipment_id=in.(${batch.join(',')})&select=id,equipment_id,image_url,description,uploaded_by,upload_date,created_at,audio_data,audio_duration&order=created_at.desc&limit=250`, 
+            { timeout: 15000 }
+          ).catch(() => ({ data: [] }));
+          
+          // Then fetch progress entries
+          const progressEntriesResponse = await api.get(
+            `/equipment_progress_entries?equipment_id=in.(${batch.join(',')})&select=*&order=created_at.desc&limit=250`, 
+            { timeout: 15000 }
+          ).catch(() => ({ data: [] }));
           
           allProgressImages.push(...(progressImagesResponse.data || []));
           allProgressEntries.push(...(progressEntriesResponse.data || []));
@@ -654,11 +657,12 @@ export const fastAPI = {
       const equipmentIds = (equipment as any[]).map(eq => eq.id);
       
       // PERFORMANCE: Batch fetch progress images and entries in smaller batches to prevent timeouts
-      // CRITICAL FIX: Reduced batch size and added retry logic for timeout errors
-      const batchSize = 20; // Reduced from 50 to 20 to prevent timeouts
+      // CRITICAL FIX: Reduced batch size from 20 to 15 and limits from 1000 to 250 for faster queries
+      const batchSize = 15; // Reduced from 20 to prevent timeouts
       const standaloneProgressImages: any[] = [];
       const standaloneProgressEntries: any[] = [];
       
+      // Process batches sequentially to avoid overwhelming the database
       for (let i = 0; i < equipmentIds.length; i += batchSize) {
         const batch = equipmentIds.slice(i, i + batchSize);
         
@@ -669,16 +673,18 @@ export const fastAPI = {
         
         while (retries <= maxRetries && !batchSuccess) {
           try {
-            const [progressImagesResponse, progressEntriesResponse] = await Promise.all([
-              // Fetch progress images for this batch
-              api.get(`/standalone_equipment_progress_images?equipment_id=in.(${batch.join(',')})&select=id,equipment_id,image_url,description,uploaded_by,upload_date,created_at,audio_data,audio_duration&order=created_at.desc&limit=1000`, 
-                { timeout: 20000 } // Increased timeout to 20s
-              ),
-              // Fetch progress entries for this batch
-              api.get(`/standalone_equipment_progress_entries?equipment_id=in.(${batch.join(',')})&select=*&order=created_at.desc&limit=1000`, 
-                { timeout: 20000 } // Increased timeout to 20s
-              )
-            ]);
+            // PERFORMANCE: Process sequentially instead of Promise.all to reduce database load
+            // Fetch progress images first
+            const progressImagesResponse = await api.get(
+              `/standalone_equipment_progress_images?equipment_id=in.(${batch.join(',')})&select=id,equipment_id,image_url,description,uploaded_by,upload_date,created_at,audio_data,audio_duration&order=created_at.desc&limit=250`, 
+              { timeout: 20000 }
+            );
+            
+            // Then fetch progress entries
+            const progressEntriesResponse = await api.get(
+              `/standalone_equipment_progress_entries?equipment_id=in.(${batch.join(',')})&select=*&order=created_at.desc&limit=250`, 
+              { timeout: 20000 }
+            );
             
             standaloneProgressImages.push(...(Array.isArray(progressImagesResponse.data) ? progressImagesResponse.data : []));
             standaloneProgressEntries.push(...(Array.isArray(progressEntriesResponse.data) ? progressEntriesResponse.data : []));
@@ -693,14 +699,16 @@ export const fastAPI = {
                 try {
                   for (const eqId of batch as string[]) {
                     try {
-                      const [imgRes, entryRes] = await Promise.all([
-                        api.get(`/standalone_equipment_progress_images?equipment_id=eq.${eqId}&select=id,equipment_id,image_url,description,uploaded_by,upload_date,created_at,audio_data,audio_duration&order=created_at.desc&limit=1000`, 
-                          { timeout: 10000 }
-                        ).catch(() => ({ data: [] })),
-                        api.get(`/standalone_equipment_progress_entries?equipment_id=eq.${eqId}&select=*&order=created_at.desc&limit=1000`, 
-                          { timeout: 10000 }
-                        ).catch(() => ({ data: [] }))
-                      ]);
+                      // Fetch sequentially for individual equipment (reduced limits from 1000 to 250)
+                      const imgRes = await api.get(
+                        `/standalone_equipment_progress_images?equipment_id=eq.${eqId}&select=id,equipment_id,image_url,description,uploaded_by,upload_date,created_at,audio_data,audio_duration&order=created_at.desc&limit=250`, 
+                        { timeout: 10000 }
+                      ).catch(() => ({ data: [] }));
+                      
+                      const entryRes = await api.get(
+                        `/standalone_equipment_progress_entries?equipment_id=eq.${eqId}&select=*&order=created_at.desc&limit=250`, 
+                        { timeout: 10000 }
+                      ).catch(() => ({ data: [] }));
                       standaloneProgressImages.push(...(imgRes.data || []));
                       standaloneProgressEntries.push(...(entryRes.data || []));
                     } catch (indError) {
@@ -1906,7 +1914,7 @@ export const fastAPI = {
     try {
       // CRITICAL FIX: Simplified query - removed complex nested joins that cause timeouts
       // Fetch only essential fields first, then fetch related data separately
-      let url = `/equipment_progress_entries?select=id,equipment_id,entry_text,entry_type,created_at,created_by,audio_data,audio_duration,image_url,image_description&order=created_at.desc&limit=500`;
+      let url = `/equipment_progress_entries?select=id,equipment_id,entry_text,entry_type,created_at,created_by,audio_data,audio_duration,image_url,image_description&order=created_at.desc&limit=200`;
       if (startDate) {
         url += `&created_at=gte.${startDate}`;
       }
@@ -1945,9 +1953,9 @@ export const fastAPI = {
       if (entries.length > 0) {
         const equipmentIds = [...new Set(entries.map((entry: any) => entry.equipment_id).filter(Boolean))];
         
-        // Fetch equipment data in smaller batches
+        // Fetch equipment data in smaller batches (reduced from 50 to 15)
         const equipmentMap: Record<string, any> = {};
-        const batchSize = 50;
+        const batchSize = 15; // Reduced from 50 to prevent timeouts
         
         for (let i = 0; i < equipmentIds.length; i += batchSize) {
           const batch = equipmentIds.slice(i, i + batchSize);
@@ -2043,7 +2051,7 @@ export const fastAPI = {
     try {
       // CRITICAL FIX: Simplified query - removed complex nested joins that cause timeouts
       // Fetch only essential fields first, then fetch related data separately if needed
-      let url = `/equipment_progress_images?select=id,equipment_id,image_url,description,uploaded_by,upload_date,created_at,audio_data,audio_duration&order=created_at.desc&limit=500`;
+      let url = `/equipment_progress_images?select=id,equipment_id,image_url,description,uploaded_by,upload_date,created_at,audio_data,audio_duration&order=created_at.desc&limit=200`;
       if (startDate) {
         url += `&created_at=gte.${startDate}`;
       }
@@ -2082,9 +2090,9 @@ export const fastAPI = {
       if (images.length > 0) {
         const equipmentIds = [...new Set(images.map((img: any) => img.equipment_id).filter(Boolean))];
         
-        // Fetch equipment data in smaller batches
+        // Fetch equipment data in smaller batches (reduced from 50 to 15)
         const equipmentMap: Record<string, any> = {};
-        const batchSize = 50;
+        const batchSize = 15; // Reduced from 50 to prevent timeouts
         
         for (let i = 0; i < equipmentIds.length; i += batchSize) {
           const batch = equipmentIds.slice(i, i + batchSize);

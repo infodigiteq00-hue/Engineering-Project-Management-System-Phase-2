@@ -75,6 +75,9 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
   const [imageDescription, setImageDescription] = useState('');
   const [selectedPhase, setSelectedPhase] = useState<'all' | 'documentation' | 'manufacturing' | 'testing' | 'dispatched'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  // Pagination state for equipment cards
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const itemsPerPage = 8;
   const [progressEntries, setProgressEntries] = useState<Record<string, Array<{ id: string, text: string, date: string, type: string }>>>({});
   const [projectMembers, setProjectMembers] = useState<any[]>([]);
   const [allUsers, setAllUsers] = useState<any[]>([]);
@@ -1336,6 +1339,11 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
     // Refresh equipment data immediately on mount to fetch latest progress images
     refreshEquipmentData(true);
   }, [projectId, refreshEquipmentData]);
+  
+  // Reset pagination to page 1 when filters change or when switching between project and standalone
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedPhase, searchQuery, projectId]);
 
   const [documents, setDocuments] = useState<Record<string, Array<{ id: string, file?: File, name: string, uploadedBy: string, uploadDate: string, document_url?: string, document_name?: string }>>>({});
   const [newDocumentName, setNewDocumentName] = useState('');
@@ -7185,8 +7193,11 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
           </div>
         </div>
       ) : (
+        <>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {localEquipment
+            {(() => {
+              // Filter and sort equipment (same logic as before)
+              const filteredAndSorted = localEquipment
             .filter(eq => {
               // Phase filter
               const phaseMatch = selectedPhase === 'all' ? true : eq.progressPhase === selectedPhase;
@@ -7216,8 +7227,20 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
               }
               // If no lastUpdate, sort by ID (newer IDs first)
               return b.id.localeCompare(a.id);
-            })
-            .map((item) => (
+                });
+              
+              // Pagination: Calculate total pages and slice data
+              const totalPages = Math.ceil(filteredAndSorted.length / itemsPerPage);
+              const startIndex = (currentPage - 1) * itemsPerPage;
+              const endIndex = startIndex + itemsPerPage;
+              const paginatedEquipment = filteredAndSorted.slice(startIndex, endIndex);
+              
+              // Reset to page 1 if current page is out of bounds
+              if (currentPage > totalPages && totalPages > 0) {
+                setCurrentPage(1);
+              }
+              
+              return paginatedEquipment.map((item) => (
               <Card key={item.id} id={`equipment-card-${item.id}`} className="overflow-hidden hover:shadow-lg transition-shadow relative bg-gray-50 border border-gray-200 h-auto sm:min-h-[420px] flex flex-col">
                 <div className="p-3 sm:p-4 flex-1 flex flex-col">
                   {/* PO-CDD Timer Section */}
@@ -9861,8 +9884,92 @@ const EquipmentGrid = ({ equipment, projectName, projectId, onBack, onViewDetail
                   </div>
                 </div>
               </Card>
-            ))}
+              ));
+            })()}
         </div>
+          
+          {/* Pagination Controls */}
+          {(() => {
+            const filteredAndSorted = localEquipment
+              .filter(eq => {
+                const phaseMatch = selectedPhase === 'all' ? true : eq.progressPhase === selectedPhase;
+                if (!phaseMatch) return false;
+                if (searchQuery.trim()) {
+                  const searchLower = searchQuery.toLowerCase();
+                  return (eq.type || '').toLowerCase().includes(searchLower) ||
+                    (eq.name || '').toLowerCase().includes(searchLower) ||
+                    (eq.tagNumber || '').toLowerCase().includes(searchLower) ||
+                    (eq.jobNumber || '').toLowerCase().includes(searchLower) ||
+                    (eq.manufacturingSerial || '').toLowerCase().includes(searchLower);
+                }
+                return true;
+              })
+              .sort((a, b) => {
+                if (a.lastUpdate && b.lastUpdate) {
+                  const dateA = new Date(a.lastUpdate);
+                  const dateB = new Date(b.lastUpdate);
+                  return dateB.getTime() - dateA.getTime();
+                }
+                return b.id.localeCompare(a.id);
+              });
+            
+            const totalPages = Math.ceil(filteredAndSorted.length / itemsPerPage);
+            const totalItems = filteredAndSorted.length;
+            
+            if (totalPages <= 1) return null;
+            
+            return (
+              <div className="flex items-center justify-between mt-6 pt-4 border-t border-gray-200">
+                <div className="text-sm text-gray-600">
+                  Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, totalItems)} of {totalItems} equipment
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    disabled={currentPage === 1}
+                    className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => setCurrentPage(pageNum)}
+                          className={`px-3 py-1.5 text-sm font-medium rounded-md ${
+                            currentPage === pageNum
+                              ? 'bg-blue-600 text-white'
+                              : 'text-gray-700 bg-white border border-gray-300 hover:bg-gray-50'
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    disabled={currentPage === totalPages}
+                    className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+        </>
       )}
 
       {/* Image Preview Modal */}

@@ -100,6 +100,10 @@ const Index = () => {
   // Standalone Equipment state
   const [standaloneEquipment, setStandaloneEquipment] = useState<any[]>([]);
   const [standaloneEquipmentLoading, setStandaloneEquipmentLoading] = useState(false);
+  
+  // Pagination state for project cards
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const itemsPerPage = 8;
 
   // Load user data from localStorage on component mount
   useEffect(() => {
@@ -404,6 +408,19 @@ const Index = () => {
   const currentProjects = activeTab === 'overdue' ? overdueProjects : 
                          activeTab === 'active' ? activeProjects :
                          allProjects;
+  
+  // Pagination: Calculate total pages and slice projects
+  const totalProjectPages = Math.ceil(currentProjects.length / itemsPerPage);
+  const startProjectIndex = (currentPage - 1) * itemsPerPage;
+  const endProjectIndex = startProjectIndex + itemsPerPage;
+  const paginatedProjects = currentProjects.slice(startProjectIndex, endProjectIndex);
+  
+  // Reset to page 1 when tab changes or if current page is out of bounds
+  useEffect(() => {
+    if (currentPage > totalProjectPages && totalProjectPages > 0) {
+      setCurrentPage(1);
+    }
+  }, [activeTab, currentPage, totalProjectPages]);
   
   // Mock VDCR data for ProjectDetails
   const mockVDCRData = [
@@ -1683,7 +1700,7 @@ Note: Please download the Recommendation Letter template using the link above, f
                     </div>
                   ))
                 ) : (
-                  currentProjects.map((project, index) => {
+                  paginatedProjects.map((project, index) => {
                   // Check if deadline is valid
                   const hasValidDeadline = project.deadline && !isNaN(new Date(project.deadline).getTime());
                   
@@ -2323,6 +2340,58 @@ Note: Please download the Recommendation Letter template using the link above, f
                 })
                 )}
               </div>
+              
+              {/* Pagination Controls for Projects */}
+              {totalProjectPages > 1 && (
+                <div className="flex items-center justify-between mt-6 pt-4 border-t border-gray-200">
+                  <div className="text-sm text-gray-600">
+                    Showing {startProjectIndex + 1} to {Math.min(endProjectIndex, currentProjects.length)} of {currentProjects.length} projects
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                      disabled={currentPage === 1}
+                      className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Previous
+                    </button>
+                    <div className="flex items-center gap-1">
+                      {Array.from({ length: Math.min(5, totalProjectPages) }, (_, i) => {
+                        let pageNum;
+                        if (totalProjectPages <= 5) {
+                          pageNum = i + 1;
+                        } else if (currentPage <= 3) {
+                          pageNum = i + 1;
+                        } else if (currentPage >= totalProjectPages - 2) {
+                          pageNum = totalProjectPages - 4 + i;
+                        } else {
+                          pageNum = currentPage - 2 + i;
+                        }
+                        return (
+                          <button
+                            key={pageNum}
+                            onClick={() => setCurrentPage(pageNum)}
+                            className={`px-3 py-1.5 text-sm font-medium rounded-md ${
+                              currentPage === pageNum
+                                ? 'bg-blue-600 text-white'
+                                : 'text-gray-700 bg-white border border-gray-300 hover:bg-gray-50'
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <button
+                      onClick={() => setCurrentPage(prev => Math.min(totalProjectPages, prev + 1))}
+                      disabled={currentPage === totalProjectPages}
+                      className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </>
         ) : mainTab === 'equipment' ? (
